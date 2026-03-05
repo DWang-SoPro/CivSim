@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config",
+  "productName": "CivSim",
+  "version": "0.1.0",
+  "identifier": "com.civsim.app",
+  "build": {
+    "frontendDist": "../frontend/dist",
+    "devUrl": "http://localhost:5173"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "文明灵 - CivSim",
+        "width": 1280,
+        "height": 800,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": [],
+    "targets": "all"
+  }
+}

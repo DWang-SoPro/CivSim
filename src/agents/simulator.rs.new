@@ -1,0 +1,48 @@
+use crate::llm::client::LLMClient;
+use crate::schemas::SimulatorOutput;
+use crate::state::CivState;
+
+pub struct Simulator {
+    client: LLMClient,
+}
+
+impl Simulator {
+    pub fn new() -> Self {
+        Self {
+            client: LLMClient::new_qwen(),
+        }
+    }
+
+    pub async fn process(
+        &self,
+        audit: &crate::schemas::AuditorOutput,
+        _state: &CivState,
+    ) -> Result<SimulatorOutput, Box<dyn std::error::Error + Send + Sync>> {
+        // 简化实现：基于成功率计算数值变化
+        let success_rate = audit.final_success_rate;
+        
+        let population_change = success_rate * 0.05; // 5% 最大人口增长
+        let stability_change = (success_rate * 10.0) as i32 - 5; // -5 到 +5
+        let authority_change = (success_rate * 5.0) as i32 - 2; // -2 到 +3
+        let tech_progress = success_rate * 0.02; // 2% 最大科技进展
+        
+        let mut events = Vec::new();
+        if success_rate > 0.7 {
+            events.push("Policy implemented successfully".to_string());
+        } else if success_rate < 0.3 {
+            events.push("Resistance from nobles".to_string());
+        }
+
+        Ok(SimulatorOutput {
+            population_change,
+            stability_change,
+            authority_change,
+            tech_progress,
+            events,
+        })
+    }
+
+    pub fn model_name(&self) -> &str {
+        self.client.model_name()
+    }
+}

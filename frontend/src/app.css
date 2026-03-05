@@ -1,0 +1,206 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ========================================
+   字体系统
+   ======================================== */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700;900&display=swap');
+
+/* ========================================
+   基础设置 - 锁定视口
+   ======================================== */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
+  background: #0a0a0a;
+  color: rgba(180, 200, 180, 0.8);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ========================================
+   颜色系统 - 深色面板
+   ======================================== */
+:root {
+  --bg-base: #0a0a0a;
+  --bg-panel: #121212;
+  --bg-panel-light: #1a1a1a;
+  --border-subtle: rgba(0, 255, 153, 0.15);
+  --border-focus: rgba(0, 255, 153, 0.3);
+  --text-primary: rgba(180, 200, 180, 0.9);
+  --text-secondary: rgba(180, 200, 180, 0.6);
+  --text-dim: rgba(180, 200, 180, 0.4);
+  --accent-green: #00ff99;
+  --accent-amber: #ffb000;
+}
+
+/* ========================================
+   排版系统 - 技术密度
+   ======================================== */
+/* 标题 - 小字号 + 大字间距 */
+.panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding: 0 0 12px 0;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* 日志区文本 */
+.log-text {
+  font-size: 14px;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+}
+
+/* 数字显示 - 金色加粗等宽 */
+.stat-number {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--accent-amber);
+  letter-spacing: 0.03em;
+}
+
+.stat-number-lg {
+  font-size: 18px;
+}
+
+/* 侧边栏指标 */
+.sidebar-stat {
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* ========================================
+   面板系统 - 接缝设计
+   ======================================== */
+.panel {
+  background: var(--bg-panel);
+  border: none;
+  border-right: 1px solid var(--border-subtle);
+  padding: 1.5rem;
+}
+
+.panel:last-child {
+  border-right: none;
+}
+
+/* ========================================
+   滚动条 - 隐形但可用
+   ======================================== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 255, 153, 0.2);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 255, 153, 0.3);
+}
+
+/* ========================================
+   CRT 效果 - 微妙复古
+   ======================================== */
+.crt-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.03) 0px,
+    rgba(0, 0, 0, 0.03) 1px,
+    transparent 1px,
+    transparent 2px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ========================================
+   工具类 - 文字亮度降级
+   ======================================== */
+.text-primary { color: var(--text-primary); }
+.text-secondary { color: var(--text-secondary); }
+.text-dim { color: var(--text-dim); }
+
+.text-accent-green { color: var(--accent-green); }
+.text-accent-amber { color: var(--accent-amber); }
+
+/* ========================================
+   输入框
+   ======================================== */
+.command-input {
+  background: var(--bg-panel-light);
+  border: 1px solid var(--border-subtle);
+  color: var(--accent-green);
+  font-family: 'JetBrains Mono', monospace;
+  padding: 12px 16px;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+.command-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px rgba(0, 255, 153, 0.1);
+}
+
+.command-input::placeholder {
+  color: var(--text-dim);
+}
+
+/* ========================================
+   按钮
+   ======================================== */
+.mech-btn {
+  background: var(--bg-panel-light);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  padding: 8px 20px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.mech-btn:hover {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+  background: rgba(0, 255, 153, 0.05);
+}
+
+.mech-btn:active {
+  transform: translateY(1px);
+}

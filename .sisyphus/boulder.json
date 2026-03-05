@@ -1,0 +1,22 @@
+{
+  "active_plan": "D:\Create\sopro_ai_lab\games\c\03\.sisyphus\plans\civsim-v1.md",
+  "started_at": "2026-02-27T17:12:04.016Z",
+  "session_ids": ["ses_36007e60affeq9xGVACjWkq71I"],
+  "plan_name": "civsim-v1",
+  "agent": "atlas",
+  "worktree_path": "D:\Create\sopro_ai_lab\games\c\03",
+  "last_task_completed": 16,
+  "next_task": null,
+  "status": "COMPLETE",
+  "completion_summary": {
+    "total_tasks": 16,
+    "completed_tasks": 16,
+    "progress": "100%",
+    "waves": {
+      "wave1": "100%",
+      "wave2": "100%",
+      "wave3": "100%",
+      "wave4": "100%"
+    }
+  }
+}

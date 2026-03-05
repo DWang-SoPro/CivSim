@@ -1,0 +1,30 @@
+[package]
+name = "civsim"
+version = "0.1.0"
+edition = "2021"
+description = "文明灵 - 多智能体协作的文明演化模拟器"
+authors = ["CivSim Team"]
+license = "MIT"
+
+[dependencies]
+async-openai = "0.25"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+statrs = "0.16"
+ndarray = "0.15"
+schemars = "1.0"
+tauri = { version = "2.0", features = [] }
+thiserror = "2.0"
+chrono = "0.4"
+dotenvy = "0.15"
+lazy_static = "1.4"
+
+futures = "0.3"
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[[bin]]
+name = "civsim"
+path = "src/main.rs"
