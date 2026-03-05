@@ -79,7 +79,18 @@ pub async fn process_player_input(
     new_state.tech_level += result.state_changes.tech_progress;
     
     // 应用领土变化 (绝对值变化)
+    // 应用领土变化 (绝对值变化)
     new_state.territory_size += result.state_changes.territory_change;
+    
+    // 应用制度变更 (如果有)
+    if let Some(ref new_political) = result.state_changes.new_political_system {
+        new_state.political_system = new_political.clone();
+    }
+    if let Some(ref new_economic) = result.state_changes.new_economic_system {
+        new_state.economic_system = new_economic.clone();
+    }
+    
+    // 确保数值在合理范围内
     
     // 确保数值在合理范围内
     new_state.population = new_state.population.max(0);

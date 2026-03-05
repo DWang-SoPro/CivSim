@@ -77,8 +77,27 @@ impl Simulator {
 - Markdown 代码块
 - 任何解释文字
 
+**JSON 字段说明：**
+- population_change: 人口变化率 (-0.30 到 +0.30)
+- stability_change: 稳定性变化 (-20 到 +20)
+- authority_change: 统治力变化 (-15 到 +15)
+- tech_progress: 科技进展 (0.00 到 0.30)
+- territory_change: 领土变化 (-500 到 +500)
+- new_political_system: 新政治制度（如"中央集权制"、"共和制"，如果政体变更则填写，否则为 null）
+- new_economic_system: 新经济制度（如"商品经济"、"计划经济"，如果经济制度变更则填写，否则为 null）
+- events: 事件列表（字符串数组）
+
+**政体变更检测：**
+如果玩家指令涉及以下关键词，请判断是否发生政体变更：
+- "政变"、"革命"、"改制" → 可能从"封建制"变为"中央集权制"
+- "共和"、"民主" → 可能建立"共和制"
+- "帝制"、"称帝" → 可能建立"君主专制"
+
 **正确示例：**
-{{"population_change": 0.05, "stability_change": 3, "authority_change": 2, "tech_progress": 0.08, "territory_change": 0, "events": []}}
+{{"population_change": 0.05, "stability_change": 3, "authority_change": 2, "tech_progress": 0.08, "territory_change": 0, "new_political_system": null, "new_economic_system": null, "events": []}}
+
+**政体变更示例：**
+{{"population_change": 0.02, "stability_change": -5, "authority_change": 10, "tech_progress": 0.05, "territory_change": 0, "new_political_system": "中央集权制", "new_economic_system": null, "events": ["政变成功", "旧贵族被清洗"]}}
 
 输出 JSON：
 "##,
@@ -165,6 +184,8 @@ impl Simulator {
             authority_change,
             tech_progress,
             territory_change,
+            new_political_system: None,
+            new_economic_system: None,
             events,
         })
     }

@@ -11,7 +11,7 @@ impl Chronicler {
     /// Create a new Chronicler instance
     pub fn new() -> Self {
         Self {
-            client: LLMClient::new_qwen3_max(), // Qwen3-Max：顶级叙事能力
+            client: LLMClient::new_qwen(), // Qwen3.5-Plus：叙事能力
         }
     }
 

@@ -13,7 +13,12 @@ pub struct SimulatorOutput {
     /// Technology progress rate (0.0 to 0.30)
     pub tech_progress: f64,
     /// Territory change in km² (-500 to 500)
+    /// Territory change in km² (-500 to 500)
     pub territory_change: f64,
+    /// New political system (if changed)
+    pub new_political_system: Option<String>,
+    /// New economic system (if changed)
+    pub new_economic_system: Option<String>,
     /// Triggered events list
     pub events: Vec<String>,
 }
@@ -29,6 +34,9 @@ mod tests {
             stability_change: -5,
             authority_change: -2,
             tech_progress: 0.15,
+            territory_change: 100.0,
+            new_political_system: None,
+            new_economic_system: None,
             events: vec!["Drought intensifies".to_string(), "Food shortage".to_string()],
         };
 

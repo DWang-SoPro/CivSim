@@ -36,8 +36,9 @@ pub struct StateChanges {
     pub authority_change: i32,
     pub tech_progress: f64,
     pub territory_change: f64,
+    pub new_political_system: Option<String>,
+    pub new_economic_system: Option<String>,
 }
-
 impl StateChanges {
     /// 累加另一个状态变化
     pub fn add(&mut self, other: &StateChanges) {
@@ -46,6 +47,13 @@ impl StateChanges {
         self.authority_change += other.authority_change;
         self.tech_progress += other.tech_progress;
         self.territory_change += other.territory_change;
+        // 对于制度变更，后一个覆盖前一个（如果有的话）
+        if other.new_political_system.is_some() {
+            self.new_political_system = other.new_political_system.clone();
+        }
+        if other.new_economic_system.is_some() {
+            self.new_economic_system = other.new_economic_system.clone();
+        }
     }
 }
 
@@ -163,6 +171,8 @@ impl GamePipeline {
                         authority_change: sim_output.authority_change,
                         tech_progress: sim_output.tech_progress,
                         territory_change: sim_output.territory_change,
+                        new_political_system: sim_output.new_political_system.clone(),
+                        new_economic_system: sim_output.new_economic_system.clone(),
                     },
                 })
             });
@@ -297,6 +307,8 @@ mod tests {
             authority_change: 3,
             tech_progress: 0.05,
             territory_change: 100.0,
+            new_political_system: None,
+            new_economic_system: None,
         };
 
         let changes2 = StateChanges {
@@ -305,6 +317,8 @@ mod tests {
             authority_change: 1,
             tech_progress: 0.03,
             territory_change: 50.0,
+            new_political_system: None,
+            new_economic_system: None,
         };
 
         changes1.add(&changes2);

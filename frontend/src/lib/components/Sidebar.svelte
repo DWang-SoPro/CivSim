@@ -1,9 +1,10 @@
 <script lang="ts">
   import { currentLang } from '$lib/stores/i18n.js';
-  import { civState } from '$lib/stores/civState.js';
+  import { civState, stateChanges, type CivState, type StateChange } from '$lib/stores/civState.js';
   
   $: lang = $currentLang;
   $: state = $civState;
+  $: changes = $stateChanges;
   
   const t = (key: string) => {
     const translations: Record<string, Record<string, string>> = {
@@ -54,14 +55,81 @@
     };
     return translations[lang][key] || key;
   };
+
+  // 计算动态最大值（留20%余量）
+  function calculateMax(value: number): number {
+    if (value <= 0) return 100;
+    // 向上取整到合适的数量级，并留20%余量
+    const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+    const normalized = value / magnitude;
+    let base: number;
+    if (normalized <= 1) base = 1;
+    else if (normalized <= 2) base = 2;
+    else if (normalized <= 5) base = 5;
+    else base = 10;
+    return base * magnitude * 1.2;
+  }
+
+  // 格式化变化量显示
+  function formatChange(value: number, isPercent: boolean = false): string {
+    if (value === 0) return '';
+    const sign = value > 0 ? '+' : '';
+    if (isPercent) {
+      return `${sign}${(value * 100).toFixed(1)}%`;
+    }
+    return `${sign}${Math.round(value).toLocaleString()}`;
+  }
+
+  // 获取变化量颜色
+  function getChangeColor(value: number, inverse: boolean = false): string {
+    if (value === 0) return 'rgba(180, 200, 180, 0.6)';
+    const isGood = inverse ? value < 0 : value > 0;
+    return isGood ? '#00ff99' : '#ff4444';
+  }
+
   // Calculate dynamic stats based on current state
   $: stats = [
-    { label: 'sidebar.population', value: state.population, max: 100000, color: '#00ff99' },
-    { label: 'sidebar.territory', value: state.territory_size, max: 5000, color: '#ffb000' },
-    { label: 'sidebar.technology', value: state.tech_level * 10, max: 100, color: '#5aa8cc' },
-    { label: 'sidebar.culture', value: 42, max: 100, color: '#b87333' },
-    { label: 'sidebar.wealth', value: 58, max: 100, color: '#ffb000' },
-    { label: 'sidebar.military', value: state.stability, max: 100, color: '#ff4444' },
+    { 
+      label: 'sidebar.population', 
+      value: state.population, 
+      max: calculateMax(state.population), 
+      color: '#00ff99',
+      change: changes?.population || 0,
+      isPercent: false
+    },
+    { 
+      label: 'sidebar.territory', 
+      value: state.territory_size, 
+      max: calculateMax(state.territory_size), 
+      color: '#ffb000',
+      change: changes?.territory_size || 0,
+      isPercent: false
+    },
+    { 
+      label: 'sidebar.technology', 
+      value: state.tech_level, 
+      max: calculateMax(state.tech_level), 
+      color: '#5aa8cc',
+      change: changes?.tech_level || 0,
+      isPercent: false
+    },
+    { 
+      label: 'sidebar.stability', 
+      value: state.stability, 
+      max: 100, 
+      color: state.stability >= 50 ? '#00ff99' : '#ff4444',
+      change: changes?.stability || 0,
+      isPercent: false,
+      inverse: true // 稳定性降低是坏事
+    },
+    { 
+      label: 'sidebar.authority', 
+      value: state.authority, 
+      max: 100, 
+      color: '#ffb000',
+      change: changes?.authority || 0,
+      isPercent: false
+    },
   ];
 </script>
 
@@ -73,7 +141,14 @@
         <div class="stat-row">
           <div class="stat-header">
             <span class="stat-label">{t(stat.label)}</span>
-            <span class="stat-number">{Math.round(stat.value).toLocaleString()}</span>
+            <div class="stat-values">
+              <span class="stat-number">{Math.round(stat.value).toLocaleString()}</span>
+              {#if stat.change !== 0}
+                <span class="stat-change" style="color: {getChangeColor(stat.change, stat.inverse)}">
+                  {formatChange(stat.change, stat.isPercent)}
+                </span>
+              {/if}
+            </div>
           </div>
           <div class="progress-bar">
             <div 
@@ -101,8 +176,6 @@
     </div>
     
     <div class="section-divider"></div>
-    
-    <h3 class="section-title">{t('sidebar.diplomacy')}</h3>
     
     <h3 class="section-title">{t('sidebar.diplomacy')}</h3>
     
@@ -171,10 +244,23 @@
     color: rgba(180, 200, 180, 0.6);
   }
   
+  .stat-values {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  
   .stat-number {
     font-size: 13px;
     font-weight: 700;
     color: #ffb000;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.03em;
+  }
+  
+  .stat-change {
+    font-size: 11px;
+    font-weight: 600;
     font-family: 'JetBrains Mono', monospace;
     letter-spacing: 0.03em;
   }
@@ -240,7 +326,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 8px 12px;
-    background: rgba(0, 255, 153, 0.05);
+    background: rgba(0, 255, 255, 153, 0.05);
     border: 1px solid rgba(0, 255, 153, 0.1);
     border-radius: 4px;
   }
