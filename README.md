@@ -101,7 +101,10 @@ cargo install --force cargo-tauri
 
 # 安装 Rust 依赖
 cargo install
-
+# 安装前端依赖
+cd frontend
+pnpm install  # 或 npm install
+cd ..
 # 安装前端依赖
 cd frontend
 npm install
@@ -125,6 +128,42 @@ cargo tauri build
 ```
 
 构建产物位于 `target/release/bundle/`
+
+
+### 6. 构建 Windows 绿色便携版
+
+无需安装，解压即用：
+
+```bash
+# 方式1: 使用自动脚本
+build-portable.bat
+
+# 方式2: 手动构建
+# 使用 pnpm 或 npm 构建前端
+cd frontend && pnpm run build && cd ..
+# 或: cd frontend && npm run build && cd ..
+cd frontend && npm run build && cd ..
+cargo build --release
+
+# 创建便携版目录
+mkdir CivSim-便携版
+mkdir CivSim-便携版\data
+
+# 复制必要文件
+copy target\release\CivSim.exe CivSim-便携版\
+copy target\release\*.dll CivSim-便携版\
+
+# 配置 API 密钥（创建 .env 文件）
+echo DASHSCOPE_API_KEY=你的密钥 > CivSim-便携版\.env
+```
+
+便携版特点：
+- ✅ 无需安装，点击即用
+- ✅ 不写注册表，无系统残留
+- ✅ 可放 U 盘随身携带
+- ✅ 存档在 data/ 文件夹，随文件夹迁移
+
+详细说明见 [PORTABLE-README.md](PORTABLE-README.md)
 
 ---
 

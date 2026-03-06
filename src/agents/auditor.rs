@@ -10,9 +10,18 @@ pub struct Auditor {
 impl Auditor {
     pub fn new() -> Self {
         Self {
-            client: LLMClient::new_qwen3_max(), // Qwen3-Max：逻辑推理 SOTA
+            client: LLMClient::new_qwen(), // Qwen3.5-Plus：轻量级、快速
         }
     }
+    
+    /// Create a new Auditor with the fast (flash) model
+    /// This is suitable for simple risk assessment where deep reasoning is not required
+    pub fn new_fast() -> Self {
+        Self {
+            client: LLMClient::with_model("qwen3.5-flash-2026-02-23"),
+        }
+    }
+
 
     pub async fn process(
         &self,

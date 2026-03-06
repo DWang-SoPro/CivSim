@@ -13,6 +13,8 @@
         'sidebar.population': '人口',
         'sidebar.territory': '领土',
         'sidebar.technology': '科技',
+        'sidebar.stability': '稳定性',
+        'sidebar.authority': '统治力',
         'sidebar.culture': '文化',
         'sidebar.wealth': '财富',
         'sidebar.military': '军事',
@@ -35,6 +37,8 @@
         'sidebar.population': 'Population',
         'sidebar.territory': 'Territory',
         'sidebar.technology': 'Technology',
+        'sidebar.stability': 'Stability',
+        'sidebar.authority': 'Authority',
         'sidebar.culture': 'Culture',
         'sidebar.wealth': 'Wealth',
         'sidebar.military': 'Military',
@@ -55,7 +59,6 @@
     };
     return translations[lang][key] || key;
   };
-
   // 计算动态最大值（留20%余量）
   function calculateMax(value: number): number {
     if (value <= 0) return 100;

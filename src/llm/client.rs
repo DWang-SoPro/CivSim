@@ -94,11 +94,41 @@ impl LLMClient {
         LLMClient { client, model: "deepseek-v3.2".to_string() }
     }
 
+    /// Create a new client with a specific model
+    /// 
+    /// # Arguments
+    /// * `model` - Model name, e.g., "qwen3.5-plus", "qwen3.5-flash-2026-02-23"
+    pub fn with_model(model: &str) -> Self {
+        let config = OpenAIConfig::new()
+            .with_api_base("https://dashscope.aliyuncs.com/compatible-mode/v1")
+            .with_api_key(env::var("DASHSCOPE_API_KEY").unwrap_or_default());
+        
+        eprintln!("INFO: LLM client initialized with custom model: {}", model);
+        
+        let client = Client::with_config(config);
+        LLMClient { client, model: model.to_string() }
+    }
+
     pub fn model_name(&self) -> &str { &self.model }
 
+    /// Standard chat with default parameters (temperature=0.7, max_tokens=2048)
     pub async fn chat(&self, prompt: &str) -> Result<String, LlmError> {
+        self.chat_with_params(prompt, 0.7, 2048).await
+    }
+
+    /// Chat with custom temperature and max_tokens for fine-grained control
+    ///
+    /// # Arguments
+    /// * `prompt` - The prompt to send
+    /// * `temperature` - Controls randomness (0.0 = deterministic, 2.0 = very random)
+    ///                     Lower values (0.3-0.5) for factual/structured output
+    ///                     Higher values (0.7-0.9) for creative/narrative output
+    /// * `max_tokens` - Maximum number of tokens to generate
+    pub async fn chat_with_params(&self, prompt: &str, temperature: f32, max_tokens: u16) -> Result<String, LlmError> {
         let agent_name = std::panic::Location::caller().file();
-        eprintln!("[{}] Sending request to model: {}", agent_name, self.model);
+
+        let agent_name = std::panic::Location::caller().file();
+        eprintln!("[{}] Sending request to model: {} (temp={}, max_tokens={})", agent_name, self.model, temperature, max_tokens);
         
         let mut last_error = String::new();
         for attempt in 1..=3 {
@@ -112,8 +142,8 @@ impl LLMClient {
                         name: None,
                     },
                 )])
-                .temperature(0.7)
-                .max_tokens(2048u16)
+                .temperature(temperature)
+                .max_tokens(max_tokens)
                 .build()
                 .map_err(|e| LlmError::Api(format!("Request build error: {}", e)))?;
 

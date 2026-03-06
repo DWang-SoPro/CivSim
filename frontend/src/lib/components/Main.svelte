@@ -2,9 +2,48 @@
   import { gameLog } from '$lib/stores/gameLog.js';
   import { currentLang } from '$lib/stores/i18n.js';
   import Markdown from 'svelte-markdown';
+  import { onMount, onDestroy } from 'svelte';
   
   $: entries = $gameLog;
   let lang = $currentLang;
+  
+  // 响应式字体大小
+  let fontSize = 14;
+  let lineHeight = 1.7;
+  
+  function calculateResponsiveFontSize() {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    
+    // 基于窗口宽度计算字体大小
+    if (width >= 1920) {
+      fontSize = 16;
+      lineHeight = 1.8;
+    } else if (width >= 1440) {
+      fontSize = 15;
+      lineHeight = 1.75;
+    } else if (width >= 1024) {
+      fontSize = 14;
+      lineHeight = 1.7;
+    } else {
+      fontSize = 13;
+      lineHeight = 1.6;
+    }
+    
+    // 如果是大屏但高度较小（如超宽屏），适当调整
+    if (width >= 1920 && height < 900) {
+      fontSize = 15;
+    }
+  }
+  
+  onMount(() => {
+    calculateResponsiveFontSize();
+    window.addEventListener('resize', calculateResponsiveFontSize);
+  });
+  
+  onDestroy(() => {
+    window.removeEventListener('resize', calculateResponsiveFontSize);
+  });
   
   const t = (key: string) => {
     const translations: Record<string, Record<string, string>> = {
@@ -31,14 +70,14 @@
     {#if entries.length === 0}
       <div class="empty-state">
         <div class="empty-icon">⌨</div>
-        <p class="empty-text">{t('main.awaiting')}</p>
-        <p class="empty-hint">{t('main.hint')}</p>
+        <p class="empty-text" style="font-size: {fontSize + 2}px;">{t('main.awaiting')}</p>
+        <p class="empty-hint" style="font-size: {fontSize - 2}px;">{t('main.hint')}</p>
       </div>
     {:else}
       {#each entries as entry (entry.id)}
         <div class="log-entry">
-          <div class="log-timestamp">{formatTimestamp(entry.timestamp)}</div>
-          <div class="log-content markdown-content">
+          <div class="log-timestamp" style="font-size: {fontSize - 3}px;">{formatTimestamp(entry.timestamp)}</div>
+          <div class="log-content markdown-content" style="font-size: {fontSize}px; line-height: {lineHeight};">
             <Markdown source={entry.message} />
           </div>
         </div>
@@ -71,14 +110,12 @@
   }
   .empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.3; }
   .empty-text {
-    font-size: 14px;
     font-weight: 600;
     letter-spacing: 0.1em;
     text-transform: uppercase;
     margin-bottom: 8px;
   }
   .empty-hint {
-    font-size: 12px;
     color: rgba(180, 200, 180, 0.4);
   }
   .log-entry {
@@ -86,16 +123,14 @@
     border-bottom: 1px solid rgba(0, 255, 153, 0.1);
   }
   .log-timestamp {
-    font-size: 11px;
     color: rgba(180, 200, 180, 0.4);
     letter-spacing: 0.1em;
     margin-bottom: 8px;
     font-family: 'JetBrains Mono', monospace;
   }
   .log-content {
-    font-size: 14px;
-    line-height: 1.7;
     color: rgba(180, 200, 180, 0.9);
+    transition: font-size 0.2s ease;
   }
   .markdown-content :global(p) {
     margin: 8px 0;
@@ -124,7 +159,6 @@
     padding: 2px 6px;
     border-radius: 3px;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
     color: #00ff99;
   }
   .markdown-content :global(pre) {

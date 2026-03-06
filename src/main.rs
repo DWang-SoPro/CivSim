@@ -36,7 +36,7 @@ async fn main() {
     
     // 初始化游戏状态
     let initial_state = CivState::default();
-    let pipeline = GamePipeline::new();
+    let pipeline = GamePipeline::new_fast();
     let storage = Storage::new("data/civsim.db").expect("Failed to initialize storage");
     storage.init_schema().expect("Failed to initialize database schema");
     

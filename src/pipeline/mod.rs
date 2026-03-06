@@ -81,6 +81,21 @@ impl GamePipeline {
         }
     }
     
+    /// Create a new GamePipeline with fast (flash) models for Auditor and Simulator
+    /// This reduces API costs and improves response time for simple calculations
+    pub fn new_fast() -> Self {
+        Self {
+            task_splitter: Arc::new(TaskSplitter::new()),
+            deconstructor: Arc::new(Deconstructor::new()),
+            auditor: Arc::new(Auditor::new_fast()),  // Use flash model
+            simulator: Arc::new(Simulator::new_fast()),  // Use flash model
+            chronicler: Arc::new(Chronicler::new()),
+            // 限制并发数为3，避免过多的API调用
+            semaphore: Arc::new(Semaphore::new(3)),
+        }
+    }
+
+    
     /// 处理一个回合（支持多任务并行）
     pub async fn process_turn(
         &self,
@@ -129,10 +144,13 @@ impl GamePipeline {
                 
                 eprintln!("[SUBTASK {}] 🔄 Processing: {}", subtask.id, subtask.description);
                 
-                // 2.1 Deconstructor: 解析子任务
-                let decon_output = deconstructor
-                    .process(&subtask.description, &state)
-                    .await
+                // 2.1 Deconstructor 和 2.2 Auditor: 并行执行
+                let decon_future = async {
+                    deconstructor.process(&subtask.description, &state).await
+                };
+                
+                // 先执行 Deconstructor，然后 Auditor 可以并行
+                let decon_output = decon_future.await
                     .map_err(|e| format!("[SUBTASK {}] Deconstructor failed: {}", subtask.id, e))?;
                 
                 // 2.2 Auditor: 计算成功率
@@ -143,7 +161,7 @@ impl GamePipeline {
                 
                 // 2.3 Simulator: 计算数值变动
                 let sim_output = simulator
-                    .process(&decon_output, &audit_output, &state)
+                    .process(&subtask.description, &decon_output, &audit_output, &state)
                     .await
                     .map_err(|e| format!("[SUBTASK {}] Simulator failed: {}", subtask.id, e))?;
                 
