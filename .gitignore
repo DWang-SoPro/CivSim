@@ -1,0 +1,84 @@
+# ---------------------------------------------------------------------------
+# CivSim v2 — Git ignore
+# ---------------------------------------------------------------------------
+
+# --- Secrets & local env ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+secrets/
+
+# --- Python ---
+.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.cache/
+*.cover
+coverage.xml
+
+# --- UV / packaging ---
+uv-cache/
+.uv/
+
+# --- Node / Next.js (frontend) ---
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.vercel/
+frontend/.turbo/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Editors & OS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- Logs & temp ---
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+
+# --- Local LLM / manual-test dumps ---
+*_manual_test*.log
+
+# --- Database local dumps ---
+*.sqlite
+*.sqlite3
+*.db
+dump.sql

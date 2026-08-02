@@ -1,0 +1,32 @@
+[project]
+name = "civsim"
+version = "0.1.0"
+description = "文明灵 CivSim v2 — 自然语言驱动的古代文明演化模拟器"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "asyncpg>=0.30.0",
+    "openai>=1.54.0",
+    "python-dotenv>=1.0.1",
+    "pyyaml>=6.0.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend"]
