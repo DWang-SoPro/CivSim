@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS landmarks (
     title TEXT,
     summary TEXT,
     state_snapshot JSONB,
+    importance_score INTEGER DEFAULT 1,
+    embedding REAL[],           -- 预留：向量检索（当前为空）
+    embedding_model TEXT,       -- 预留：记录嵌入模型名
     created_at TIMESTAMP
 );
 

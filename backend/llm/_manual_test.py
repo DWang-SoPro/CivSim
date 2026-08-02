@@ -6,6 +6,7 @@
        uv run python -m backend.llm._manual_test              # 意图管线
        uv run python -m backend.llm._manual_test --narrator  # 叙事生成
        uv run python -m backend.llm._manual_test --fullturn  # 端到端完整回合
+       uv run python -m backend.llm._manual_test --memory    # 三层记忆系统
        uv run python -m backend.llm._manual_test --all       # 意图+叙事
        uv run python -m backend.llm._manual_test --narrator 灾难  # 过滤叙事用例
 
@@ -25,8 +26,14 @@ from backend.config import settings
 from backend.engine.action_resolver import full_turn_to_debug_dict, resolve_full_turn
 from backend.llm.client import LLMClient, LLMError
 from backend.llm.intent_parser import parse_intent
-from backend.llm.narrator import Importance, NarrationInput, ResultTier, narrate_stream
+from backend.llm.narrator import Importance, NarrationInput, ResultTier, narrate, narrate_stream
 from backend.llm.task_splitter import split_tasks
+from backend.memory.landmark import create_landmarks_from_turn
+from backend.memory.recent import build_recent_context, load_recent_turns
+from backend.memory.retriever import retrieve_history_context
+from backend.memory.store import MemoryStore, TurnRecord
+from backend.memory.summary import maybe_create_summary, should_trigger_summary
+from backend.models.schemas import Accumulations, LandSystem
 from backend.templates.civilizations import load_civ_state
 
 FULLTURN_RNG_SEED = 42
@@ -321,6 +328,355 @@ async def run_fullturn_one(
         traceback.print_exc()
 
 
+def _make_scripted_turn(
+    store: MemoryStore,
+    turn: int,
+    *,
+    year_base: float,
+    player_input: str,
+    action_description: str,
+    result_tier: str,
+    domain_tags: list[str],
+    dimension_changes: dict[str, str],
+    narrative: str,
+    summary: str | None = None,
+) -> TurnRecord:
+    """手工构造一轮历史（不调结算引擎）。"""
+    return store.add_turn(
+        TurnRecord(
+            game_id=store.game_id,
+            turn=turn,
+            year_start=year_base + (turn - 1) * 2,
+            year_end=year_base + turn * 2,
+            player_input=player_input,
+            action_description=action_description,
+            result_tier=result_tier,
+            dimension_changes=dimension_changes,
+            narrative=narrative,
+            summary=summary or f"{action_description} → {result_tier}",
+            domain_tags=domain_tags,
+        )
+    )
+
+
+async def run_memory_demo(client: LLMClient) -> None:
+    """三层记忆手动验收：脚本历史 → 摘要压缩 → landmark → 检索 → 带因果叙事。"""
+    bar = "=" * 72
+    print(f"\n{bar}")
+    print("[记忆系统 --memory]")
+    print("文明：西周模板；构造 10 回合脚本历史，真实调用摘要 LLM + 叙事 LLM")
+    print(bar)
+
+    state0 = load_civ_state("zhou")
+    # 抬高行政积累，便于叙事体现「底蕴」
+    state0 = state0.model_copy(
+        update={
+            "accumulations": Accumulations(
+                academic=0.4,
+                military=0.5,
+                commercial=0.3,
+                administrative=1.35,
+                cultural=0.6,
+            )
+        }
+    )
+    store = MemoryStore(game_id="manual-memory-demo")
+    year_base = float(state0.year)
+
+    scripted: list[dict[str, Any]] = [
+        {
+            "turn": 1,
+            "input": "兴修水利",
+            "desc": "疏通沟渠、兴修水利以利农耕",
+            "tier": "partial",
+            "tags": ["economic"],
+            "changes": {"food": "+小幅", "stability": "-2"},
+            "narrative": (
+                "公元前1046年，王廷下令疏通王畿沟渠。百姓扛着农具出工，"
+                "部分渠段当年见效，也有郡国征发过重、民有怨言。"
+            ),
+        },
+        {
+            "turn": 2,
+            "input": "扩建军队",
+            "desc": "扩充甲士、整备车马",
+            "tier": "success",
+            "tags": ["military"],
+            "changes": {"authority": "+4", "stability": "-1"},
+            "narrative": (
+                "公元前1044年，王室扩军整训。军伍人数增加，边地诸侯对王命更加忌惮，"
+                "民间略感征发之苦。"
+            ),
+        },
+        {
+            "turn": 3,
+            "input": "设立学宫",
+            "desc": "于王城设立学宫传授典籍",
+            "tier": "success",
+            "tags": ["cultural"],
+            "changes": {"tech_knowledge": "+小幅", "stability": "+2"},
+            "narrative": (
+                "公元前1042年，学宫落成。贵族子弟入学诵读，典籍传抄渐广，"
+                "朝中议论时也多了些引经据典的口气。"
+            ),
+        },
+        {
+            "turn": 4,
+            "input": "派使者与邻国结盟",
+            "desc": "遣使与东方诸侯缔结盟约",
+            "tier": "success",
+            "tags": ["political"],
+            "changes": {"authority": "+3", "stability": "+1"},
+            "narrative": (
+                "公元前1040年，使者持礼币东行，与两家邻国定盟。边境摩擦暂息，"
+                "王廷威望小有回升。"
+            ),
+        },
+        {
+            "turn": 5,
+            "input": "迁都洛邑，并更改田制",
+            "desc": "迁都洛邑并推行新田制",
+            "tier": "great_success",
+            "tags": ["political", "institutional"],
+            "changes": {"authority": "+12", "stability": "-5", "bureaucratization": "+小幅"},
+            "narrative": (
+                "公元前1038年，王室迁都洛邑，并更张田制。旧贵族有人观望，有人抵制，"
+                "但新都落成、田籍重定，政令从此更易到达东方。此事震动朝野，成为一代转折。"
+            ),
+        },
+        {
+            "turn": 6,
+            "input": "练兵于西陲",
+            "desc": "于西陲校阅车骑",
+            "tier": "partial",
+            "tags": ["military"],
+            "changes": {"authority": "+2", "stability": "-1"},
+            "narrative": (
+                "公元前1036年，西陲校场点兵。甲士阵形可观，粮秣转运却跟不上，"
+                "只能算小有成效。"
+            ),
+        },
+        {
+            "turn": 7,
+            "input": "开市通商",
+            "desc": "开放关市、鼓励商旅往来",
+            "tier": "success",
+            "tags": ["economic"],
+            "changes": {"food": "+小幅", "stability": "+1"},
+            "narrative": (
+                "公元前1034年，关市放宽。商旅渐多，王城市井热闹了些，府库也略有进项。"
+            ),
+        },
+        {
+            "turn": 8,
+            "input": "整饬吏治，颁布考绩之法",
+            "desc": "整饬吏治并颁布地方官考绩之法",
+            "tier": "success",
+            "tags": ["political"],
+            "changes": {"authority": "+6", "stability": "+3", "bureaucratization": "+小幅"},
+            "narrative": "",  # 本回合将用检索后的叙事覆盖
+        },
+        {
+            "turn": 9,
+            "input": "修补城墙",
+            "desc": "加固王城与要隘城墙",
+            "tier": "success",
+            "tags": ["military"],
+            "changes": {"authority": "+2", "stability": "+1"},
+            "narrative": "公元前1030年，城墙加高加厚，守军信心稍增。",
+        },
+        {
+            "turn": 10,
+            "input": "推广铁农具",
+            "desc": "在王畿推广铁制农具",
+            "tier": "partial",
+            "tags": ["technology", "economic"],
+            "changes": {"tech_agriculture": "+小幅", "tech_engineering": "+小幅"},
+            "narrative": (
+                "公元前1028年，铁农具开始下发到部分乡邑。工匠跟得上的地方收成好转，"
+                "偏远处仍多用旧器。"
+            ),
+        },
+    ]
+
+    summary_at_5 = None
+    summary_at_10 = None
+    landmarks_turn5: list[Any] = []
+
+    # ---- 写入 1–7，并在第 5 回合触发 landmark + 摘要 ----
+    for item in scripted:
+        t = int(item["turn"])
+        if t == 8:
+            break  # 第 8 回合单独做检索+叙事
+        _make_scripted_turn(
+            store,
+            t,
+            year_base=year_base,
+            player_input=item["input"],
+            action_description=item["desc"],
+            result_tier=item["tier"],
+            domain_tags=item["tags"],
+            dimension_changes=item["changes"],
+            narrative=item["narrative"],
+        )
+
+        if t == 5:
+            before = state0.model_copy(deep=True)
+            after = before.model_copy(deep=True)
+            after.turn = 5
+            after.year = year_base + 10
+            # 西周模板本身已是 state_grant，须改成不同制度才能触发 landmark
+            after.land_system = LandSystem.YEOMAN_SMALLHOLD
+            after.authority = min(100.0, before.authority + 12)
+            after.stability = max(0.0, before.stability - 5)
+            landmarks_turn5 = create_landmarks_from_turn(
+                store,
+                turn=5,
+                year=float(after.year),
+                state_before=before,
+                state_after=after,
+                domain_tags=["political"],
+                action_description=item["desc"],
+                result_tier=item["tier"],
+                narrative=item["narrative"],
+            )
+            print(f"\n{'-' * 72}")
+            print("【Landmark 触发 — 第5回合迁都+改田制】")
+            for lm in landmarks_turn5:
+                print(
+                    f"- title={lm.title}\n"
+                    f"  tags={lm.tags}\n"
+                    f"  importance={lm.importance_score}\n"
+                    f"  summary={lm.summary}\n"
+                    f"  embedding={lm.embedding!r} (预留未实现)"
+                )
+
+        if should_trigger_summary(t):
+            print(f"\n{'-' * 72}")
+            print(f"【中期摘要触发】current_turn={t}（% 5 == 0）")
+            rec = await maybe_create_summary(
+                store,
+                current_turn=t,
+                civ_name=state0.civ_name,
+                client=client,
+            )
+            if t == 5:
+                summary_at_5 = rec
+            elif t == 10:
+                summary_at_10 = rec
+            if rec is None:
+                print("!! 摘要未生成")
+            else:
+                print(
+                    f"turn_start={rec.turn_start} turn_end={rec.turn_end}\n"
+                    f"domain_frequencies={rec.domain_frequencies}\n"
+                    f"--- content ---\n{rec.content}"
+                )
+
+    # ---- 检查近期记忆（写入 1–7 后最近 5 = 3–7）----
+    print(f"\n{'-' * 72}")
+    print("【第一层 近期记忆】写入 1–7 后最近 5 回合")
+    recent = load_recent_turns(store, limit=5)
+    print(f"回合号: {[t.turn for t in recent]}")
+    print(build_recent_context(store, limit=5))
+    assert [t.turn for t in recent] == [3, 4, 5, 6, 7], recent
+
+    # ---- 第 8 回合：政治行动 + 检索 + 叙事 ----
+    print(f"\n{'-' * 72}")
+    print("【检索】第8回合政治域行动 → 应命中迁都等 political landmark")
+    history_ctx = retrieve_history_context(
+        store,
+        domain_tags=["political"],
+        state=state0,
+        recent_limit=5,
+        summary_limit=3,
+        landmark_limit=5,
+    )
+    print(history_ctx)
+    assert "迁都" in history_ctx or "制度" in history_ctx, "应检索到迁都/制度 landmark"
+    assert "【路径积累】" in history_ctx
+    assert "行政经验" in history_ctx
+
+    turn8 = scripted[7]
+    narration_input = NarrationInput(
+        civ_name=state0.civ_name,
+        year=year_base + 16,
+        action_description=turn8["desc"],
+        result_tier=ResultTier.SUCCESS,
+        dimension_changes=turn8["changes"],
+        events=["部分旧族对新考绩法阳奉阴违，旋即被王廷点名申饬"],
+        is_unexecutable=False,
+        importance=Importance.MAJOR,
+        history_context=history_ctx,
+        recent_imagery=[],
+    )
+    print(f"\n{'-' * 72}")
+    print("【带 history_context 的史官叙事】第8回合整饬吏治")
+    t0 = time.perf_counter()
+    narrative8 = await narrate(narration_input, client=client)
+    print(narrative8)
+    print(f"耗时={(time.perf_counter() - t0) * 1000:.0f}ms | 字数≈{len(narrative8)}")
+
+    # 写入第 8 回合（含生成叙事）
+    _make_scripted_turn(
+        store,
+        8,
+        year_base=year_base,
+        player_input=turn8["input"],
+        action_description=turn8["desc"],
+        result_tier=turn8["tier"],
+        domain_tags=turn8["tags"],
+        dimension_changes=turn8["changes"],
+        narrative=narrative8,
+    )
+
+    # ---- 补写 9–10，第 10 回合再压一次摘要 ----
+    for item in scripted:
+        t = int(item["turn"])
+        if t < 9:
+            continue
+        _make_scripted_turn(
+            store,
+            t,
+            year_base=year_base,
+            player_input=item["input"],
+            action_description=item["desc"],
+            result_tier=item["tier"],
+            domain_tags=item["tags"],
+            dimension_changes=item["changes"],
+            narrative=item["narrative"],
+        )
+        if should_trigger_summary(t):
+            print(f"\n{'-' * 72}")
+            print(f"【中期摘要触发】current_turn={t}")
+            rec = await maybe_create_summary(
+                store,
+                current_turn=t,
+                civ_name=state0.civ_name,
+                client=client,
+            )
+            summary_at_10 = rec
+            if rec is None:
+                print("!! 摘要未生成")
+            else:
+                print(
+                    f"turn_start={rec.turn_start} turn_end={rec.turn_end}\n"
+                    f"domain_frequencies={rec.domain_frequencies}\n"
+                    f"--- content ---\n{rec.content}"
+                )
+
+    print(f"\n{bar}")
+    print("【记忆系统验收摘要】")
+    print(f"- 近期记忆最近5回合: {[t.turn for t in load_recent_turns(store)]}")
+    print(f"- 第5回合摘要: {'OK' if summary_at_5 else 'MISSING'}")
+    print(f"- 第10回合摘要: {'OK' if summary_at_10 else 'MISSING'}")
+    print(f"- 第5回合 landmarks: {len(landmarks_turn5)} 条")
+    print(f"- 全库 landmarks: {len(store.get_all_landmarks())} 条")
+    print(f"- 全库 summaries: {len(store.get_recent_summaries(limit=10))} 条")
+    print(f"- 第8回合叙事是否含历史回响: 请人工阅读上方叙事（应提及迁都/洛邑/田制等）")
+    print(bar)
+
+
 async def run_narrator_one(
     client: LLMClient, label: str, payload: NarrationInput
 ) -> None:
@@ -375,6 +731,7 @@ async def main() -> int:
     filters = [a for a in sys.argv[1:] if not a.startswith("-")]
 
     run_fullturn = "--fullturn" in flags
+    run_memory = "--memory" in flags
     run_intent = "--all" in flags or "--intent" in flags
     run_narrator = "--narrator" in flags or "--all" in flags
     # 默认无标志：只跑意图（兼容旧用法）
@@ -382,9 +739,14 @@ async def main() -> int:
         run_intent = True
         run_narrator = False
         run_fullturn = False
+        run_memory = False
     if run_fullturn and flags == {"--fullturn"}:
         run_intent = False
         run_narrator = False
+    if run_memory and flags == {"--memory"}:
+        run_intent = False
+        run_narrator = False
+        run_fullturn = False
 
     print(f"模型: {settings.llm_model}")
     print(f"Base URL: {settings.llm_base_url}")
@@ -395,6 +757,11 @@ async def main() -> int:
     except LLMError as exc:
         print(f"初始化客户端失败: {exc}", file=sys.stderr)
         return 1
+
+    if run_memory:
+        await run_memory_demo(client)
+        print("\n" + "=" * 72)
+        print("记忆系统手动测试完成。")
 
     if run_fullturn:
         state = load_civ_state("zhou")

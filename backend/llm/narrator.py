@@ -95,9 +95,17 @@ NARRATOR_SYSTEM_PROMPT = """\
 要写出历史况味——朝堂茫然、群臣面面相觑、诏令石沉大海的荒诞感；
 可参考 unexecutable_reason（若有）。不要干巴巴说「失败」或「技术不够」。用白话写，不要堆砌生僻典故。
 
-【历史因果（预留）】
+【历史因果】
 当 history_context 非空时，在叙事中自然体现「往事如何导致今日」的因果链，
-不生硬回顾、不做编年罗列。若 history_context 为空或未提供，则忽略本条。
+不生硬回顾、不做编年罗列。若当前事件与【相关史事】或【近期历程】有关联，
+要让读者感受到「因为当年做了某事，所以今天才会如此」，而不是开中药铺式点名。
+若 history_context 为空或未提供，则忽略本条。
+
+【路径积累——如何运用】
+history_context 中若含【路径积累】段落，说明该文明在各领域的长期底蕴深浅。
+当某领域积累深厚、且当前行动恰属该领域时，叙事应自然写出底蕴带来的顺畅感，
+例如「赖数十年兴学之功，新法一点即透」「军伍素有训练，征发并不慌乱」；
+若积累尚浅，则可略写根基不足、推行吃力。不要报出积累数值本身。
 
 【events】
 若提供了 events，把它们自然织进叙事，不要做成清单。若事件原文偏文言，改写成白话后再写入。
@@ -154,7 +162,8 @@ class NarrationInput(BaseModel):
         default=Importance.NORMAL, description="重要性：normal|major"
     )
     history_context: Optional[str] = Field(
-        default=None, description="历史上下文；当前可传 null"
+        default=None,
+        description="历史上下文（近期+中期摘要+相关 landmark+积累值）",
     )
     unexecutable_reason: Optional[str] = Field(
         default=None,

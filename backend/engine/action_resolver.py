@@ -550,10 +550,12 @@ async def resolve_full_turn(
     generate_narrative: bool = True,
     capacity_params: type[CapacityParams] = CapacityParams,
     recent_imagery: Optional[list[str]] = None,
+    history_context: Optional[str] = None,
 ) -> FullTurnResult:
     """完整回合：拆分 → 意图 → 国力 → 摩擦掷骰 → 数值 → 叙事。
 
     固定 rng_seed 保证可复现。dilution 只乘数值，不改 P_success。
+    history_context 由记忆检索器在叙事前注入；默认 None。
     """
     text = player_input.strip()
     if not text:
@@ -789,7 +791,7 @@ async def resolve_full_turn(
         events=all_events,
         is_unexecutable=is_unexec_turn,
         importance=importance,
-        history_context=None,
+        history_context=history_context,
         unexecutable_reason=unexec_reason,
         recent_imagery=list(recent_imagery or []),
     )

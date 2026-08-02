@@ -187,7 +187,8 @@ npm run dev
 | --- | --- |
 | Phase 1：骨架 · CivState · 数学引擎 · 六模板 | 完成 |
 | Phase 2：LLM 客户端 · 拆分 · 意图 · 叙事 · capacity · 全链路回合 | 完成（API/存档/前端 UI 未接） |
-| Phase 3+：知识注入完整评估 · 记忆检索 · 行动 API · 前端卷轴 UI · PostgreSQL 存档 | 待做 |
+| Phase 3：三层记忆（近期 / 中期摘要 / 长期 landmark）+ 关键词检索注入叙事 | 已完成 |
+| Phase 4+：知识注入完整评估 · 行动 API · 前端卷轴 UI · PostgreSQL 存档接通 | 待做 |
 
 ---
 
