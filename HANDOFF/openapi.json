@@ -5,6 +5,102 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/game/new": {
+      "post": {
+        "tags": [
+          "game"
+        ],
+        "summary": "New Game",
+        "description": "从文明模板创建一个进程内游戏会话。",
+        "operationId": "new_game_api_game_new_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewGameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewGameResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/game/{game_id}/action": {
+      "post": {
+        "tags": [
+          "action"
+        ],
+        "summary": "Submit Action",
+        "description": "结算一条政令；叙事事件由编排器回调转发到本局 WebSocket。",
+        "operationId": "submit_action_api_game__game_id__action_post",
+        "parameters": [
+          {
+            "name": "game_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Game Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitActionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "summary": "Health",
@@ -26,6 +122,922 @@
             }
           }
         }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Accumulations": {
+        "properties": {
+          "academic": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Academic",
+            "description": "学术基础：教育/研究/知识传播，≥ 0.0",
+            "default": 0.0
+          },
+          "military": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Military",
+            "description": "军事传统：练兵/战争/军事改革，≥ 0.0",
+            "default": 0.0
+          },
+          "commercial": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Commercial",
+            "description": "商业生态：贸易/市场/货币，≥ 0.0",
+            "default": 0.0
+          },
+          "administrative": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Administrative",
+            "description": "行政经验：官僚/法律/制度建设，≥ 0.0",
+            "default": 0.0
+          },
+          "cultural": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Cultural",
+            "description": "宗教文化：宗教/仪式/意识形态，≥ 0.0",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "title": "Accumulations",
+        "description": "五个领域的路径积累值（设计文档第六节）。实践中约 0—3.0，无硬上限。"
+      },
+      "ActionDomain": {
+        "type": "string",
+        "enum": [
+          "economic",
+          "political",
+          "military",
+          "cultural",
+          "technology",
+          "composite"
+        ],
+        "title": "ActionDomain",
+        "description": "行动领域。"
+      },
+      "ActionScale": {
+        "type": "string",
+        "enum": [
+          "small",
+          "medium",
+          "large"
+        ],
+        "title": "ActionScale",
+        "description": "行动规模：牵动的人力物力与结构深度。"
+      },
+      "AuthoritySource": {
+        "type": "string",
+        "enum": [
+          "bloodline",
+          "military",
+          "election",
+          "theocratic"
+        ],
+        "title": "AuthoritySource",
+        "description": "权力来源。"
+      },
+      "CivState": {
+        "properties": {
+          "civ_name": {
+            "type": "string",
+            "title": "Civ Name",
+            "description": "文明名称"
+          },
+          "template_id": {
+            "type": "string",
+            "title": "Template Id",
+            "description": "模板标识符"
+          },
+          "turn": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Turn",
+            "description": "当前回合数，≥ 0",
+            "default": 0
+          },
+          "year": {
+            "type": "number",
+            "title": "Year",
+            "description": "当前年份（可为负表示公元前）"
+          },
+          "population": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Population",
+            "description": "人口（整数）。初始范围约 10,000—100,000"
+          },
+          "tech_agriculture": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Tech Agriculture",
+            "description": "农业技术线等级，连续浮点，0.0 起步，约 5.0 对应近代早期"
+          },
+          "tech_engineering": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Tech Engineering",
+            "description": "工程与军事技术线等级，连续浮点，≥ 0.0"
+          },
+          "tech_knowledge": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Tech Knowledge",
+            "description": "知识与文化技术线等级，连续浮点，≥ 0.0"
+          },
+          "territory_core": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Territory Core",
+            "description": "核心领土面积（km²），治理效率不衰减"
+          },
+          "territory_frontier": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Territory Frontier",
+            "description": "边疆领土面积（km²），治理效率随距离衰减"
+          },
+          "biome_fertility": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Biome Fertility",
+            "description": "生态肥力，范围 0.0—1.0；开局由地域决定"
+          },
+          "agricultural_modifier": {
+            "type": "number",
+            "maximum": 2.0,
+            "minimum": 0.5,
+            "title": "Agricultural Modifier",
+            "description": "农业修正系数：肥力之外的农业禀赋（灌溉传统、作物品种、耕作技艺等），范围约 0.5—2.0，默认 1.0；用于模板级盈余校准，不改动领土",
+            "default": 1.0
+          },
+          "land_system": {
+            "$ref": "#/components/schemas/LandSystem",
+            "description": "主导土地制度"
+          },
+          "labor_distribution": {
+            "$ref": "#/components/schemas/LaborDistribution",
+            "description": "劳动形态比例分布"
+          },
+          "surplus_extraction": {
+            "items": {
+              "$ref": "#/components/schemas/SurplusExtraction"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Surplus Extraction",
+            "description": "剩余提取方式列表（可多种并存）"
+          },
+          "polity": {
+            "$ref": "#/components/schemas/Polity",
+            "description": "政体结构三子维度组合"
+          },
+          "bureaucratization": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Bureaucratization",
+            "description": "官僚化程度，范围 0.0—1.0；上限受知识技术约束"
+          },
+          "legitimacy": {
+            "$ref": "#/components/schemas/Legitimacy",
+            "description": "合法性结构"
+          },
+          "religions": {
+            "items": {
+              "$ref": "#/components/schemas/Religion"
+            },
+            "type": "array",
+            "title": "Religions",
+            "description": "宗教实体列表，可有 0 到多个"
+          },
+          "stability": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Stability",
+            "description": "稳定性，范围 0—100"
+          },
+          "authority": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Authority",
+            "description": "统治力，范围 0—100，反映统治集团实际控制力"
+          },
+          "class_tension": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Tension",
+            "description": "阶级矛盾，范围 0.0—1.0；None 表示由引擎按公式计算"
+          },
+          "elite_cohesion": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elite Cohesion",
+            "description": "精英凝聚力，范围 0.0—1.0；None 表示由引擎估算"
+          },
+          "accumulations": {
+            "$ref": "#/components/schemas/Accumulations",
+            "description": "五个领域的路径积累值"
+          },
+          "knowledge_institution_coverage": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Knowledge Institution Coverage",
+            "description": "知识机构覆盖率，范围 0.0—1.0；由宗教知识载体与学宫建设决定",
+            "default": 0.5
+          }
+        },
+        "type": "object",
+        "required": [
+          "civ_name",
+          "template_id",
+          "year",
+          "population",
+          "tech_agriculture",
+          "tech_engineering",
+          "tech_knowledge",
+          "territory_core",
+          "territory_frontier",
+          "biome_fertility",
+          "land_system",
+          "labor_distribution",
+          "surplus_extraction",
+          "polity",
+          "bureaucratization",
+          "legitimacy",
+          "stability",
+          "authority"
+        ],
+        "title": "CivState",
+        "description": "完整文明状态：物质基底 + 生产关系 + 上层建筑 + 社会张力 + 积累值。"
+      },
+      "DecisionStructure": {
+        "type": "string",
+        "enum": [
+          "autocracy",
+          "oligarchy",
+          "council",
+          "bureaucracy"
+        ],
+        "title": "DecisionStructure",
+        "description": "决策结构。"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "IntentResult": {
+        "properties": {
+          "action_domain": {
+            "$ref": "#/components/schemas/ActionDomain"
+          },
+          "action_type": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Action Type"
+          },
+          "action_description": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Action Description"
+          },
+          "cognitive_gap": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Cognitive Gap",
+            "description": "认知代差 0–5"
+          },
+          "resistance_sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Resistance Sources"
+          },
+          "beneficiaries": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Beneficiaries"
+          },
+          "prerequisites": {
+            "$ref": "#/components/schemas/Prerequisites"
+          },
+          "is_knowledge_injection": {
+            "type": "boolean",
+            "title": "Is Knowledge Injection",
+            "default": false
+          },
+          "knowledge_detail_level": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeDetailLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "is_too_vague": {
+            "type": "boolean",
+            "title": "Is Too Vague",
+            "description": "输入过于模糊、无法对应可结算行动",
+            "default": false
+          },
+          "clarification_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clarification Prompt",
+            "description": "is_too_vague=true 时的史官口吻反问；否则 null"
+          },
+          "scale": {
+            "$ref": "#/components/schemas/ActionScale",
+            "description": "行动规模 small|medium|large",
+            "default": "medium"
+          },
+          "time_estimate_years": {
+            "type": "number",
+            "maximum": 20.0,
+            "minimum": 0.1,
+            "title": "Time Estimate Years",
+            "description": "预估年数，钳制到 [0.1, 20.0]"
+          },
+          "time_estimate_reasoning": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Time Estimate Reasoning"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action_domain",
+          "action_type",
+          "action_description",
+          "cognitive_gap",
+          "prerequisites",
+          "time_estimate_years",
+          "time_estimate_reasoning"
+        ],
+        "title": "IntentResult",
+        "description": "意图解析结构化输出（设计文档 4.3 + 模糊判定 + 规模）。"
+      },
+      "KnowledgeDetailLevel": {
+        "type": "string",
+        "enum": [
+          "concept",
+          "direction",
+          "operational",
+          "detailed"
+        ],
+        "title": "KnowledgeDetailLevel",
+        "description": "知识注入描述可执行度档位。"
+      },
+      "LaborDistribution": {
+        "properties": {
+          "free_citizens": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Free Citizens",
+            "description": "自由民（自主劳动）比例，范围 0.0—1.0"
+          },
+          "corvee": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Corvee",
+            "description": "徭役（义务劳动，保留人身自由）比例，范围 0.0—1.0"
+          },
+          "serf": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Serf",
+            "description": "农奴（依附土地，有限人身自由）比例，范围 0.0—1.0"
+          },
+          "slave": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Slave",
+            "description": "奴隶（无人身自由）比例，范围 0.0—1.0"
+          }
+        },
+        "type": "object",
+        "required": [
+          "free_citizens",
+          "corvee",
+          "serf",
+          "slave"
+        ],
+        "title": "LaborDistribution",
+        "description": "劳动形态比例分布，四类比例之和必须为 1.0。"
+      },
+      "LandSystem": {
+        "type": "string",
+        "enum": [
+          "clan_communal",
+          "noble_estate",
+          "state_grant",
+          "landlord_tenant",
+          "yeoman_smallhold"
+        ],
+        "title": "LandSystem",
+        "description": "土地制度：文明同一时间一种主导制度，可并存过渡态。"
+      },
+      "Legitimacy": {
+        "properties": {
+          "traditional": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Traditional",
+            "description": "传统型合法性：「我们家族一直统治」，范围 0.0—1.0"
+          },
+          "religious": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Religious",
+            "description": "宗教型合法性：「天命所归/神选」，范围 0.0—1.0"
+          },
+          "performance": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Performance",
+            "description": "绩效型合法性：「我带来了胜利/繁荣」，范围 0.0—1.0"
+          },
+          "legal": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Legal",
+            "description": "法理型合法性：「制度规定我来统治」，范围 0.0—1.0"
+          }
+        },
+        "type": "object",
+        "required": [
+          "traditional",
+          "religious",
+          "performance",
+          "legal"
+        ],
+        "title": "Legitimacy",
+        "description": "合法性结构：多个来源各自强度，非单一数值。"
+      },
+      "NewGameRequest": {
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "title": "Template Id"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "template_id"
+        ],
+        "title": "NewGameRequest",
+        "description": "新建游戏请求。"
+      },
+      "NewGameResponse": {
+        "properties": {
+          "game_id": {
+            "type": "string",
+            "title": "Game Id"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CivState"
+          },
+          "seed": {
+            "type": "integer",
+            "title": "Seed"
+          },
+          "opening_narrative": {
+            "type": "string",
+            "title": "Opening Narrative"
+          }
+        },
+        "type": "object",
+        "required": [
+          "game_id",
+          "state",
+          "seed",
+          "opening_narrative"
+        ],
+        "title": "NewGameResponse",
+        "description": "新建游戏响应。"
+      },
+      "Polity": {
+        "properties": {
+          "authority_source": {
+            "$ref": "#/components/schemas/AuthoritySource",
+            "description": "权力来源"
+          },
+          "decision_structure": {
+            "$ref": "#/components/schemas/DecisionStructure",
+            "description": "决策结构"
+          },
+          "succession": {
+            "$ref": "#/components/schemas/Succession",
+            "description": "继承方式"
+          }
+        },
+        "type": "object",
+        "required": [
+          "authority_source",
+          "decision_structure",
+          "succession"
+        ],
+        "title": "Polity",
+        "description": "政体结构：权力来源 × 决策结构 × 继承方式。"
+      },
+      "Prerequisites": {
+        "properties": {
+          "met": {
+            "type": "boolean",
+            "title": "Met",
+            "description": "当前是否基本满足前置条件"
+          },
+          "details": {
+            "type": "string",
+            "title": "Details",
+            "description": "需要什么条件、当前是否满足"
+          },
+          "nearest_alternative": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nearest Alternative",
+            "description": "不满足时最近的可行替代；满足可为 null"
+          }
+        },
+        "type": "object",
+        "required": [
+          "met",
+          "details"
+        ],
+        "title": "Prerequisites",
+        "description": "前置条件评估。"
+      },
+      "Religion": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "宗教名称"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ReligionType",
+            "description": "宗教类型"
+          },
+          "coverage": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Coverage",
+            "description": "人口覆盖率，范围 0.0—1.0；所有宗教 coverage 之和 ≤ 1.0"
+          },
+          "state_relation": {
+            "$ref": "#/components/schemas/StateRelation",
+            "description": "与国家的关系"
+          },
+          "organization": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Organization",
+            "description": "组织化程度：0=散漫民间信仰，1=高度组织化教团"
+          },
+          "knowledge_carrier": {
+            "type": "boolean",
+            "title": "Knowledge Carrier",
+            "description": "是否承担教育/记录/历法职能"
+          },
+          "economic_power": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Economic Power",
+            "description": "经济实力（神殿经济/教会地产/什一税），范围 0.0—1.0"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "type",
+          "coverage",
+          "state_relation",
+          "organization",
+          "knowledge_carrier",
+          "economic_power"
+        ],
+        "title": "Religion",
+        "description": "单个宗教实体。"
+      },
+      "ReligionType": {
+        "type": "string",
+        "enum": [
+          "nature_worship",
+          "ancestor_worship",
+          "city_patron",
+          "monotheism",
+          "polytheistic",
+          "philosophical"
+        ],
+        "title": "ReligionType",
+        "description": "宗教类型。"
+      },
+      "StateRelation": {
+        "type": "string",
+        "enum": [
+          "state_religion",
+          "protected",
+          "tolerated",
+          "suppressed"
+        ],
+        "title": "StateRelation",
+        "description": "宗教与国家的关系。"
+      },
+      "SubmitActionRequest": {
+        "properties": {
+          "input": {
+            "type": "string",
+            "title": "Input"
+          },
+          "rng_seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rng Seed"
+          },
+          "stream_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stream Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input"
+        ],
+        "title": "SubmitActionRequest"
+      },
+      "SubmitActionResponse": {
+        "properties": {
+          "game_id": {
+            "type": "string",
+            "title": "Game Id"
+          },
+          "turn": {
+            "type": "integer",
+            "title": "Turn"
+          },
+          "settlement_skipped": {
+            "type": "boolean",
+            "title": "Settlement Skipped"
+          },
+          "vague_prompts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Vague Prompts"
+          },
+          "overall_tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall Tier"
+          },
+          "turn_years": {
+            "type": "number",
+            "title": "Turn Years"
+          },
+          "dimension_changes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Dimension Changes"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "importance": {
+            "type": "string",
+            "title": "Importance"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CivState"
+          },
+          "intents": {
+            "items": {
+              "$ref": "#/components/schemas/IntentResult"
+            },
+            "type": "array",
+            "title": "Intents"
+          },
+          "capacity": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capacity"
+          },
+          "game_over": {
+            "type": "boolean",
+            "title": "Game Over"
+          },
+          "game_over_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Over Reason"
+          },
+          "ws_stream_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ws Stream Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "game_id",
+          "turn",
+          "settlement_skipped",
+          "vague_prompts",
+          "overall_tier",
+          "turn_years",
+          "dimension_changes",
+          "events",
+          "importance",
+          "state",
+          "intents",
+          "capacity",
+          "game_over",
+          "game_over_reason",
+          "ws_stream_id"
+        ],
+        "title": "SubmitActionResponse"
+      },
+      "Succession": {
+        "type": "string",
+        "enum": [
+          "hereditary",
+          "abdication",
+          "election",
+          "military_coup"
+        ],
+        "title": "Succession",
+        "description": "继承方式。"
+      },
+      "SurplusExtraction": {
+        "type": "string",
+        "enum": [
+          "tribute",
+          "tax_in_kind",
+          "tax_monetary",
+          "commercial_tax"
+        ],
+        "title": "SurplusExtraction",
+        "description": "剩余提取方式。"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
       }
     }
   }

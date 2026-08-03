@@ -1,8 +1,8 @@
 # 文明灵 CivSim v2 — 设计文档（交接更新版）
 
-> **本文定位**：给 Phase 4 新工具/新同学的「设计意图 vs 当前实现」说明书。  
+> **本文定位**：给 Phase 4 及后续开发的「设计意图 vs 当前实现」说明书。
 > **完整原始 GDD**：仓库根目录 [`civsim-v2-gdd.md`](../civsim-v2-gdd.md)（机制公式、模板叙事、UI 方向仍以原文为准）。  
-> **版本锚点**：Phase 1–3 已落地；Phase 4 = 前端 + API 接线。  
+> **版本锚点**：Phase 1–3 已落地；Phase 4 最小可玩闭环已完成。
 > **图例**：✅ 完成 · ⏳ 部分 · ⬜ 未做
 
 ---
@@ -33,9 +33,10 @@
 | TaskSplitter | `backend/llm/task_splitter.py` | ✅ | |
 | IntentParser | `backend/llm/intent_parser.py` | ✅ | 含 scale / vague / 知识注入**判定** |
 | Narrator | `backend/llm/narrator.py` | ✅ | 白话史官；history + 积累提示词已接 |
+| Opening narrator | `backend/llm/opening.py` | ✅ | 完整初始 `CivState` → 150–250 字第 0 回合开场；V4 Flash、thinking 关闭 |
 | LLM Client | `backend/llm/client.py` | ✅ | DeepSeek V4 Flash；json + stream |
-| 全链路回合 | `resolve_full_turn` | ✅ | CLI/`--fullturn` 可跑；**无 HTTP** |
-| 模糊输入反问 | `is_too_vague` | ⏳ | **引擎已跳过结算**；API/前端未接；`parse_intent` 残留过时 TODO 注释 |
+| 全链路回合 | `resolve_full_turn` + `run_game_turn` | ✅ | 核心结算 + HTTP 无关编排层 |
+| 模糊输入反问 | `is_too_vague` | ✅ | 引擎跳过结算；API 返回 `vague_prompts`，前端可继续输入 |
 | 知识注入评估 | `knowledge_evaluator.py` | ⬜ | 意图侧仅打标；评估函数 `NotImplementedError`；结算未走特殊管线 |
 | 三层记忆 | `backend/memory/*` | ✅ | recent / summary / landmark + retriever；内存 `MemoryStore` |
 | 向量检索 | `embed_text` / landmarks.embedding | ⏳ | **字段与接口预留**；实现推迟；现用关键词 tags |
@@ -44,9 +45,9 @@
 | Game Over | `gameover.py` | ⏳ | 仅人口归零；文档第八节未做深 |
 | 宗教**计算** | schemas + landmark 检测 | ⏳ | **数据结构齐全**；摩擦里 `religious_resistance` 默认 0；无改教/神权深度逻辑 |
 | PostgreSQL schema | `db/migrations/*.sql` | ⏳ | SQL 已写；Repository/API 未接；手测走内存 |
-| FastAPI 游戏 API | `backend/api/*` | ⬜ | 仅根 `GET /health` |
-| WebSocket 叙事 | `api/websocket.py` | ⬜ | |
-| 前端卷轴 UI | `frontend/` | ⬜ | Next.js 15 骨架页 |
+| FastAPI 游戏 API | `backend/api/*` | ⏳ | 已有 new/action/WS；状态查询、存档等待后续 |
+| WebSocket 叙事 | `api/websocket.py` | ✅ | 纯流式叙事 + `state_update` + 可选 `game_over` |
+| 前端最小闭环 | `frontend/` | ✅ | Next.js 纯文本页；第 0 回合开场 + 状态变化箭头/差值/颜色；卷轴视觉未做 |
 | 存档读档 API | — | ⬜ | |
 
 ---
@@ -93,8 +94,8 @@
 | --- | --- |
 | 设计意图 | 空洞口号（「发展」「变强」）不结算，史官反问具体化。 |
 | 当前实现 | LLM 输出 `is_too_vague` + `clarification_prompt`；`resolve_full_turn`：无可结算子任务则 `settlement_skipped=True` |
-| 仍 TODO | **HTTP/WS/前端**未定义「待澄清」态；`parse_intent`  docstring 残留过时 TODO（实现已进 resolver） |
-| 交接建议 | Phase 4 按 `api_contract.md` 返回 `vague_prompts`，勿再进数学引擎 |
+| 当前实现 | HTTP 返回 `settlement_skipped` + `vague_prompts`；不发叙事/状态 WS 帧，不写记忆 |
+| 仍 TODO | `parse_intent` docstring 残留过时 TODO（实现已进 resolver） |
 
 ### 3.6 知识注入 — 仅判定
 
@@ -157,7 +158,11 @@
 | | |
 | --- | --- |
 | 设计意图 | REST + WS 流式叙事；古典卷轴 UI |
-| 当前实现 | 后端逻辑在 CLI；`frontend` 为 Next 骨架；契约见 `HANDOFF/api_contract.md` |
+| 当前实现 | FastAPI new/action/WS + Next.js 最小纯文本闭环；契约见 `HANDOFF/api_contract.md` |
+| 新局反馈 | `POST /new` 基于完整模板生成第 0 回合史官开场；不硬编码各文明文案 |
+| 玩家时序 | `narrative_start → delta* → narrative_end → state_update`；此时立即可下一道政令 |
+| 数值反馈 | 前端仅在状态面板消费 `dimension_changes`，以箭头、差值和语义色显示；叙事正文仍不报数值 |
+| 后台收尾 | `state_update` 后检查 Game Over，再提交 turn/landmark/每 5 回合 summary；同局锁保证顺序 |
 
 ---
 
@@ -172,8 +177,9 @@
   → 数值汇总写回 CivState（含积累衰减）
   → retrieve_history_context（关键词 landmark + 积累）
   → Narrator（同步 CLI / 流式 Web）
-  → commit_turn_memory（turn / landmark / 每5回合摘要）
+  → Web: state_update（玩家解锁）
   → check_game_over（极简）
+  → commit_turn_memory（后台 turn / landmark / 每5回合摘要）
 ```
 
 与 GDD §10.5 差异：被动事件与知识注入支路尚未插入；记忆检索在实现上由**编排层**调用而非写死在 resolver 内。

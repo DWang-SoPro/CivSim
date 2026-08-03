@@ -1,8 +1,8 @@
 # CivSim v2 — API 契约（Phase 4 接线用）
 
-> 状态：截至 Phase 3 结束。FastAPI 仅挂载 `GET /health`；其余端点均为**待接线**契约，供前端与 API 层对齐。  
+> 状态：Phase 4 最小可玩闭环已接线；本文档记录当前的纯流式交互契约。
 > 设计依据：`civsim-v2-gdd.md` §10.4–10.5；内部逻辑见 `backend/engine/action_resolver.py` 与 `HANDOFF/wiring_todo.md`。  
-> 机器可读快照：同目录 `openapi.json`（当前仅含 `/health`）。
+> 机器可读快照：同目录 `openapi.json`。WebSocket 帧不会出现在 OpenAPI 中，以本文档 §3 为准。
 
 ---
 
@@ -15,15 +15,15 @@
 | ID 类型 | `game_id` / `save_id`：UUID 字符串 |
 | 状态体 | `CivState`（`backend/models/schemas.py`），JSON 序列化用 `model_dump()` |
 | 错误体 | `{ "detail": string \| object }`（FastAPI 默认）；业务码见各端点 |
-| CORS | 待接线时需对 Next.js 开发源放行 |
+| CORS | 已放行 `localhost:3000` 与 `127.0.0.1:3000` 的 Next.js 开发源 |
 | 鉴权 | MVP 无鉴权；单机本地会话即可 |
 
-**路由模块占位（未 `include_router`）：**
+**已挂载路由：**
 
 - `backend/api/game.py` — prefix `/api/game`
 - `backend/api/action.py` — prefix `/api/game`
 - `backend/api/websocket.py` — 无 prefix
-- `backend/main.py` — 仅注册 `GET /health`
+- `backend/main.py` — 注册健康检查、游戏、行动与 WebSocket 路由
 
 ---
 
@@ -40,16 +40,16 @@
 
 ---
 
-## 2. 待接线端点
+## 2. 游戏端点
 
-下列 schema 为**推荐契约**（Phase 4 可微调字段名，但建议与下表对齐，减少前端返工）。
+下列 new/action 为当前已实现契约；其余端点仍是后续建议。
 
 ### 2.1 `POST /api/game/new` — 新建游戏
 
 | | |
 | --- | --- |
-| 状态 | ⬜ 待接线 |
-| 内部函数 | `backend.templates.civilizations.load_civ_state(template_id)`；写入 `games` + `game_states`（DB 读写待做，可先内存 `dict[game_id, session]`） |
+| 状态 | ✅ Phase 4 MVP 已实现（进程内会话） |
+| 内部函数 | `load_civ_state(template_id)` → `generate_opening_narrative(state)` → 建立内存会话；开场生成成功后才注册会话 |
 
 **请求 `NewGameRequest`**
 
@@ -65,13 +65,15 @@
 | `game_id` | `str` (UUID) | 新局 ID |
 | `state` | `CivState` | 初始完整状态 |
 | `seed` | `int` | 实际使用的 RNG 种子 |
+| `opening_narrative` | `str` | 基于完整初始状态生成的 150–250 字白话史官开场；前端作为第 0 回合叙事展示 |
 
 **错误**
 
 | HTTP | 条件 |
 | --- | --- |
 | 400 | `template_id` 非法 |
-| 500 | 模板加载 / DB 失败 |
+| 503 | 开场 LLM 调用失败，或两次输出均未满足字数要求；不会创建残留会话 |
+| 500 | 其他未预期的模板加载 / 会话创建失败 |
 
 ---
 
@@ -102,9 +104,9 @@
 
 | | |
 | --- | --- |
-| 状态 | ⬜ 待接线（核心） |
+| 状态 | ✅ Phase 4 MVP 已实现 |
 | 内部编排 | 见 `wiring_todo.md`；核心结算 `resolve_full_turn`；记忆 `retrieve_history_context` + `commit_turn_memory` |
-| 叙事 | REST **不**返回完整叙事正文（或只返回摘要）；正文走 WebSocket 流式 |
+| 叙事 | REST **不**返回完整叙事正文；正文与最终状态走 WebSocket 纯流式序列 |
 
 **请求 `SubmitActionRequest`**
 
@@ -112,6 +114,7 @@
 | --- | --- | --- |
 | `input` | `str` | 玩家自然语言政令，非空 |
 | `rng_seed` | `int \| null` | 可选覆盖本回合种子（调试用） |
+| `stream_id` | `str (UUID) \| null` | 客户端建议在提交前生成；服务端从第一个 WS 帧起原样回传，未传则由服务端生成 |
 
 **响应 `SubmitActionResponse`（同步返回的数值侧结果）**
 
@@ -129,9 +132,9 @@
 | `state` | `CivState \| null` | 结算后状态；跳过时为原状态或 `null` |
 | `intents` | `list[IntentResult]` | 各子任务意图（调试/面板可用；生产可裁剪） |
 | `capacity` | `object \| null` | 国力结算摘要（`dilution_factor` 等，可选） |
-| `game_over` | `bool` | |
-| `game_over_reason` | `str \| null` | |
-| `ws_stream_id` | `str \| null` | 建议：本回合叙事流关联 ID；客户端用 WS 收叙事 |
+| `game_over` | `bool` | state-ready 响应中为 `false`；最终结果以后续 WS `game_over` 帧为准 |
+| `game_over_reason` | `str \| null` | state-ready 响应中为 `null` |
+| `ws_stream_id` | `str \| null` | 本回合流 ID；与请求 `stream_id` 一致（模糊短路时为 `null`） |
 
 **关键内部类型（已存在，可直接序列化）**
 
@@ -162,8 +165,9 @@
 | --- | --- |
 | 400 | `input` 空；局已 `game_over` |
 | 404 | 局不存在 |
-| 409 | 建议：上一回合叙事流未结束又提交（可选） |
-| 502 / 503 | LLM 调用失败（DeepSeek） |
+| 422 | `stream_id` 不是合法 UUID，或其他请求 schema 错误 |
+| 排队 | 上一回合正在提交记忆时，新回合在本局互斥锁上等待，不返回 409 |
+| 502 / 503 | LLM 调用失败，或上一回合记忆收尾未知失败后会话被安全停止 |
 
 **与 `resolve_full_turn` 的关系**
 
@@ -177,7 +181,10 @@ split+intent 已在 resolve_full_turn 内完成
     history = retrieve_history_context(store, domain_tags=..., state=state_before)
     narration_input.history_context = history
     通过 WS 调用 narrate_stream(narration_input)
-    commit_turn_memory(...); check_game_over; 持久化
+    推 narrative_end
+    推 state_update（玩家回合在此完成）
+    check_game_over（命中则推 game_over）
+    后台 commit_turn_memory(...)
 ```
 
 说明：当前 `resolve_full_turn` 接受外部传入的 `history_context`，并在 `generate_narrative=True` 时**同步**调用 `narrate()`（非流式）。Web 接线应设 `generate_narrative=False`，叙事改走 WS。
@@ -304,7 +311,7 @@ split+intent 已在 resolve_full_turn 内完成
 
 | | |
 | --- | --- |
-| 状态 | ⬜ 待接线（`backend/api/websocket.py` 空壳） |
+| 状态 | ✅ Phase 4 MVP 已实现 |
 | 内部 | `backend.llm.narrator.narrate_stream(NarrationInput)` → `LLMClient.call_text_stream` |
 
 #### 3.1 连接
@@ -320,9 +327,9 @@ split+intent 已在 resolve_full_turn 内完成
 
 ```json
 {
-  "type": "narrative_start | narrative_delta | narrative_end | narrative_error | ping | state_patch",
+  "type": "narrative_start | narrative_delta | narrative_end | state_update | game_over | narrative_error | ping",
   "turn": 8,
-  "stream_id": "可选，与 action 响应的 ws_stream_id 对齐",
+  "stream_id": "与 action 请求/响应对齐的 UUID",
   "payload": {}
 }
 ```
@@ -332,15 +339,18 @@ split+intent 已在 resolve_full_turn 内完成
 | `narrative_start` | `{ "action_description", "result_tier", "importance" }` | 本回合叙事开始；前端清空「进行中」缓冲 |
 | `narrative_delta` | `{ "text": "……" }` | 增量文本块（模型 token/片段，非固定字数） |
 | `narrative_end` | `{ "full_text": "……", "dimension_changes": {} }` | 结束信号；可用 `full_text` 做校验拼接 |
+| `state_update` | `{ "state": CivState, "dimension_changes": {} }` | 紧跟 `narrative_end`；最终数值已提交，客户端更新面板并立即解锁下一回合 |
+| `game_over` | `{ "reason": "…" }` | 仅终局检查命中时，在 `state_update` 之后发送 |
 | `narrative_error` | `{ "message": "…" }` | 流式失败；前端展示错误并允许重试（若实现） |
-| `state_patch` | `{ "state": CivState }` | 可选：叙事结束后再推一次状态（若 REST 已含 state 可省略） |
 | `ping` | `{}` | 心跳（可选） |
 
 **开始/结束硬性约定**
 
-1. 每个成功结算且需叙事的回合：**恰好一对** `narrative_start` → 若干 `narrative_delta` → `narrative_end`。
+1. 每个成功结算且需叙事的回合：**恰好一组** `narrative_start` → 若干 `narrative_delta` → `narrative_end` → `state_update`。
 2. `settlement_skipped`（模糊反问）：**不**发叙事流；反问在 REST `vague_prompts` 中返回。
-3. 客户端以 `narrative_end` 为「本回合叙事完成」信号，再解锁下一轮输入（可与 REST 返回并行：REST 先到、WS 后到）。
+3. 客户端以 `state_update` 为「玩家的本回合完成」信号；`narrative_end` 只表示文本已结束。
+4. 服务端在 `state_update` 之后才做 Game Over 检查和记忆提交；记忆提交不阻塞前端解锁。
+5. 所有帧均带同一 `turn` 与 `stream_id`，客户端必须据此拒绝迟到旧帧。
 
 #### 3.3 客户端 → 服务端（可选）
 
@@ -350,19 +360,26 @@ MVP 可不需要客户端发消息。若需要：
 { "type": "subscribe", "stream_id": "..." }
 ```
 
-#### 3.4 与 REST 时序（推荐）
+#### 3.4 纯流式时序（当前实现）
 
 ```
 Client                    REST                         WS
   |-- POST /action ------->|                            |
   |                        |-- settle (no narrate) ---> |
   |                        |-- retrieve history ------->|
-  |<-- SubmitActionResponse-|                            |
   |                        |-- narrative_start -------->|
   |                        |-- narrative_delta* -------->|
   |                        |-- narrative_end ----------->|
-  |                        |-- commit memory / save --->|
+  |                        |-- state_update ------------>|
+  |<-- SubmitActionResponse-|                            |
+  |                        |-- game_over? -------------->|
+  |                        |-- commit memory / summary  |
+  |-- next POST /action -->|-- wait same-game lock ---->|
 ```
+
+`state_update` 一经到达，玩家即可提交下一道政令。若上一回合的记忆收尾
+仍在进行（尤其第 5、10… 回合的 LLM 摘要），新请求会在每局互斥锁上等待，
+确保记忆严格按回合顺序写入。
 
 ---
 
@@ -397,8 +414,8 @@ Client                    REST                         WS
 
 ## 5. OpenAPI
 
-- 当前导出：`HANDOFF/openapi.json`（仅 `/health`）。
-- Phase 4 实现端点后，重新导出：
+- 当前导出：`HANDOFF/openapi.json`（`/health`、`/api/game/new`、`/api/game/{game_id}/action`）。
+- HTTP schema 变更后重新导出：
 
 ```bash
 uv run python -c "from backend.main import app; import json; print(json.dumps(app.openapi(), ensure_ascii=False, indent=2))" > HANDOFF/openapi.json

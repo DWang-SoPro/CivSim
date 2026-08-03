@@ -57,7 +57,7 @@ Narrator（流式白话史官叙事）
 ├── civsim-v2-gdd.md          # 游戏设计文档（规范源）
 ├── pyproject.toml / uv.lock  # Python 依赖
 ├── backend/
-│   ├── main.py               # FastAPI 入口（健康检查）
+│   ├── main.py               # FastAPI 入口（health + game/action/WS）
 │   ├── config.py             # 环境配置
 │   ├── models/schemas.py     # CivState 与枚举
 │   ├── templates/            # 六个开局文明模板
@@ -76,7 +76,7 @@ Narrator（流式白话史官叙事）
 │   ├── api/                  # HTTP / WS 路由（占位）
 │   └── db/                   # PostgreSQL 迁移占位
 ├── tests/                    # pytest（不调用真实 LLM）
-└── frontend/                 # Next.js 前端骨架
+└── frontend/                 # Next.js 最小可玩页面
 ```
 
 ---
@@ -125,11 +125,14 @@ cp .env.example .env
 uv run pytest
 ```
 
-### 4. 启动 API（当前仅 `/health`）
+### 4. 启动 API
 
 ```bash
 uv run uvicorn backend.main:app --reload --port 8000
 ```
+
+已挂载 `/health`、`POST /api/game/new`、`POST /api/game/{id}/action`
+与 `WS /api/game/{id}/ws`。
 
 ### 5. LLM 手测脚手架
 
@@ -147,13 +150,17 @@ uv run python -m backend.llm._manual_test --fullturn
 uv run python -m backend.llm._manual_test --fullturn 三大规模
 ```
 
-### 6. 前端（骨架）
+### 6. 前端（最小可玩页）
 
 ```bash
 cd frontend
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
+
+打开 `http://localhost:3000`，默认以西周模板新建游戏。新局会先生成一段
+基于完整模板状态的第 0 回合史官开场；政令结算后，状态面板会用箭头、
+差值和颜色标出本回合变化，叙事正文仍保持文学化表达。
 
 ---
 
@@ -186,9 +193,10 @@ npm run dev
 | 阶段 | 状态 |
 | --- | --- |
 | Phase 1：骨架 · CivState · 数学引擎 · 六模板 | 完成 |
-| Phase 2：LLM 客户端 · 拆分 · 意图 · 叙事 · capacity · 全链路回合 | 完成（API/存档/前端 UI 未接） |
+| Phase 2：LLM 客户端 · 拆分 · 意图 · 叙事 · capacity · 全链路回合 | 完成 |
 | Phase 3：三层记忆（近期 / 中期摘要 / 长期 landmark）+ 关键词检索注入叙事 | 已完成 |
-| Phase 4+：知识注入完整评估 · 行动 API · 前端卷轴 UI · PostgreSQL 存档接通 | 待做 |
+| Phase 4：最小 FastAPI + WebSocket + Next.js 可玩闭环 | 已完成 |
+| Phase 4+：知识注入完整评估 · 前端卷轴 UI · PostgreSQL 存档接通 | 待做 |
 
 ---
 

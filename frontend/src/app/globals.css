@@ -5,12 +5,18 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --change-up: #147a36;
+  --change-down: #b42318;
+  --change-zero: #6b7280;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --change-up: #4ade80;
+    --change-down: #f87171;
+    --change-zero: #9ca3af;
   }
 }
 
@@ -18,4 +24,21 @@ body {
   color: var(--foreground);
   background: var(--background);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+.dimension-change {
+  margin-inline-start: 0.5em;
+  white-space: nowrap;
+}
+
+.dimension-change--up {
+  color: var(--change-up);
+}
+
+.dimension-change--down {
+  color: var(--change-down);
+}
+
+.dimension-change--zero {
+  color: var(--change-zero);
 }

@@ -1,6 +1,6 @@
 # CivSim v2 — 运行说明（交接）
 
-面向 Phase 4 新开发环境：如何装依赖、配环境、跑测试与手测、目录怎么读。
+面向 Phase 4 及后续开发：如何装依赖、配环境、跑测试、启动最小 Web 闭环与手测。
 
 ---
 
@@ -30,20 +30,21 @@
 ├── pyproject.toml / uv.lock
 ├── .env.example
 ├── backend/
-│   ├── main.py               # FastAPI：目前仅 GET /health
+│   ├── main.py               # FastAPI：health + game/action/WS 路由
 │   ├── config.py
 │   ├── models/schemas.py     # CivState
 │   ├── templates/            # 六文明 + actions 占位
-│   ├── engine/               # 纯函数数学引擎 + resolve_full_turn
+│   ├── engine/               # 数学引擎 + resolve_full_turn + orchestrator
 │   ├── llm/                  # DeepSeek 管线 + _manual_test.py
 │   ├── memory/               # 三层记忆 + MemoryStore
-│   ├── api/                  # HTTP/WS 路由占位（未挂到 main）
+│   ├── api/                  # 进程内会话 + HTTP/WS 接线层
 │   └── db/                   # migrations + pool 占位
 ├── tests/                    # pytest（不调真实 LLM）
-└── frontend/                 # Next 骨架
+└── frontend/                 # Next.js 最小可玩页面
 ```
 
 **完整回合入口（逻辑）：** `backend.engine.action_resolver.resolve_full_turn`  
+**完整回合入口（编排）：** `backend.engine.orchestrator.run_game_turn`
 **记忆提交入口：** `backend.memory.pipeline.commit_turn_memory`  
 **检索入口：** `backend.memory.retriever.retrieve_history_context`
 
@@ -62,7 +63,7 @@ uv sync
 
 ```bash
 cd frontend
-npm install
+pnpm install
 ```
 
 ### PostgreSQL（可选，Phase 4 存档前可先不装）
@@ -118,7 +119,9 @@ uv run pytest
 
 ---
 
-## 7. 启动 API（当前极简）
+## 7. 启动最小 Web 闭环
+
+终端 1（仓库根目录）：
 
 ```bash
 uv run uvicorn backend.main:app --reload --port 8000
@@ -126,7 +129,19 @@ uv run uvicorn backend.main:app --reload --port 8000
 # Swagger: http://localhost:8000/docs
 ```
 
-游戏路由尚未 `include_router`。契约见 `api_contract.md`。
+终端 2：
+
+```bash
+cd frontend
+pnpm dev
+```
+
+打开 `http://localhost:3000`：新建游戏默认使用西周模板。执行政令后，
+WebSocket 按 `narrative_start → narrative_delta* → narrative_end → state_update`
+推送；数值更新后立即可下达下一道政令。`POST /api/game/new` 会先调用
+V4 Flash（thinking 关闭），根据完整初始 `CivState` 返回
+`opening_narrative`，前端将其显示为第 0 回合背景。`state_update` 中的
+`dimension_changes` 仅在状态面板显示箭头、差值与颜色，不写入叙事正文。
 
 ---
 
@@ -157,21 +172,14 @@ uv run python -m backend.llm._manual_test --fullturn 三大规模
 uv run python -m backend.llm._manual_test --memory
 ```
 
-前端骨架：
-
-```bash
-cd frontend && npm run dev
-```
-
 ---
 
 ## 9. 已知 TODO / 技术债
 
 | 项 | 说明 |
 | --- | --- |
-| API 未接线 | `api/game.py` / `action.py` / `websocket.py` 空壳；`main` 未挂载 |
 | DB 无 Repository | 有 SQL 与 `asyncpg` 池占位，无读写封装 |
-| 记忆仅内存 | `MemoryStore`；多进程/重启丢历史 |
+| 会话/记忆仅内存 | 必须单 worker 运行；多进程不共享，重启丢历史 |
 | 知识注入 | 仅意图打标；`knowledge_evaluator` 未实现；管线无分支 |
 | 被动事件 | 占位空列表，未接入 resolver |
 | Game Over | 仅 `population <= 0` |
@@ -179,10 +187,10 @@ cd frontend && npm run dev
 | 宗教深度 | 有结构，无计算闭环 |
 | 向量检索 | 接口预留，未实现 |
 | 过时注释 | `intent_parser.parse_intent` 仍写 vague 管线 TODO — **resolver 已接线** |
-| `resolve_full_turn` 默认同步叙事 | Web 需 `generate_narrative=False` + WS `narrate_stream` |
-| retriever 在 resolver 外 | API 编排必须显式调用（见 `wiring_todo.md`） |
+| `resolve_full_turn` 默认同步叙事 | Web 已由 `run_game_turn` 传 `generate_narrative=False` 并改走 `narrate_stream` |
+| retriever 在 resolver 外 | 已由 `run_game_turn` 显式编排（见 `wiring_todo.md`） |
 | README 进度表 | 根 `README.md` 已标 Phase 3 完成；细节以 HANDOFF 为准 |
-| 前端 | 无卷轴 UI、未对接后端 |
+| 前端 | 只有最小可玩页；卷轴 UI、菜单、存读档等仍未做 |
 
 ---
 
@@ -202,6 +210,7 @@ cd frontend && npm run dev
 | 用途 | 符号 |
 | --- | --- |
 | 全回合 | `backend.engine.action_resolver.resolve_full_turn` |
+| 完整编排 | `backend.engine.orchestrator.run_game_turn` |
 | 国力 | `backend.engine.capacity.CapacityParams` |
 | 意图 schema | `backend.llm.intent_parser.IntentResult` |
 | 叙事输入 | `backend.llm.narrator.NarrationInput` |

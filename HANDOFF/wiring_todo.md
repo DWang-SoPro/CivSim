@@ -1,6 +1,7 @@
 # 命令行 → Web 接线清单
 
-> 目标：把 `_manual_test.py` 里已跑通的完整回合，包装成 REST + WebSocket，供 Phase 4 前端使用。  
+> 状态：Phase 4 最小可玩闭环已完成；本清单同时保留后续未接线项。
+> 当前 HTTP / WebSocket 真相源见 `HANDOFF/api_contract.md`。
 > 真相源：`backend/engine/action_resolver.resolve_full_turn`、`backend/memory/*`、`backend/llm/*`。
 
 ---
@@ -40,7 +41,9 @@
 | 16 | 记忆落库 | `commit_turn_memory(...)` | `backend/memory/pipeline.py`：turns → landmarks → 每 5 回合 summary |
 | 17 | Game Over | `check_game_over(state)` | **极简**：仅 `population <= 0`；未接文档第八节完整条件 |
 
-`resolve_full_turn` 已串联 **1–11 + 14–15**（15 可选）。**13、16、17、12** 需 API 编排层补上。
+`resolve_full_turn` 已串联 **1–11 + 14–15**（15 可选）。新增的
+`backend.engine.orchestrator.run_game_turn` 已在 HTTP 之外补上 **13、16、17**；
+**12** 被动事件仍是后续项。
 
 ---
 
@@ -48,7 +51,7 @@
 
 | API | 包装方式 |
 | --- | --- |
-| `POST /api/game/new` | `load_civ_state` + 分配 `game_id` + 建 `MemoryStore`/DB 行 + 返回 `state` |
+| `POST /api/game/new` | `load_civ_state` + `generate_opening_narrative`（完整状态、thinking 关闭）+ 分配 `game_id` + 建 `MemoryStore`/DB 行 + 返回 `state` 与 `opening_narrative` |
 | `GET /api/game/{id}` | 读会话 `CivState` + `status` |
 | `POST /api/game/{id}/action` | 见下一节主编排 |
 | `GET /api/game/{id}/menu` | `generate_action_menu(state)`（需先实现菜单数据） |
@@ -67,79 +70,41 @@
 ```python
 async def handle_action(game_id, player_input, ws_hub):
     session = load_session(game_id)          # state, store, seed, status
-    if session.status == "game_over":
-        raise HTTPException(400, "game over")
-
-    result = await resolve_full_turn(
-        session.state,
-        player_input,
-        client=llm,
-        rng_seed=session.next_seed(),
-        generate_narrative=False,            # 关键：禁止内部同步 narrate
-        history_context=None,                # 先结算，再检索
-    )
-
-    if result.settlement_skipped:
-        return SubmitActionResponse(
-            settlement_skipped=True,
-            vague_prompts=result.vague_prompts,
-            state=session.state,             # 未变
-            ...
-        )
-
-    domain_tags = list({
-        s.intent.action_domain.value
-        for s in result.subtasks
-        if not s.skipped_vague
-    })
-    history = retrieve_history_context(
-        session.store,
-        domain_tags=domain_tags,
-        state=result.state_before,          # 积累值用行动前或后均可；现实现读传入 state
-        landmark_limit=5,
-        summary_limit=3,
-    )
-    assert result.narration_input is not None
-    result.narration_input.history_context = history
-
     stream_id = new_stream_id()
-    # 先返回 REST（含 state_after、dimension_changes），再异步推 WS
-    asyncio.create_task(stream_narrative(ws_hub, game_id, stream_id, result.narration_input))
+    ready = asyncio.get_running_loop().create_future()
 
-    session.state = result.state_after
-    session.state.turn += 1                  # 若 resolve 内未自增 turn，在此对齐
-    # 注意：核对 resolve / _apply_aggregated 是否已更新 turn/year —— 以代码为准
+    async def on_turn_ready(turn):
+        session.state = turn.state           # resolve 已推进 turn / year
+        await push_state_update(ws_hub, game_id, stream_id, turn)
+        ready.set_result(turn)               # 玩家在此解锁
 
-    await commit_turn_memory(
-        session.store,
-        turn=session.state.turn,
-        year_start=result.state_before.year,
-        state_before=result.state_before,
-        state_after=result.state_after,
-        player_input=player_input,
-        action_description=result.narration_input.action_description,
-        result_tier=result.overall_tier.value,
-        dimension_changes=result.dimension_changes,
-        narrative="",                        # 可先空，WS 结束后回填
-        domain_tags=domain_tags,
-        events=result.events,
-        client=llm,
-        full_result=result,
-    )
-
-    reason = check_game_over(session.state)
-    if reason:
+    async def on_game_over(result):
         session.status = "game_over"
+        await push_game_over(ws_hub, game_id, stream_id, result)
 
-    persist(session)
-    return SubmitActionResponse(..., ws_stream_id=stream_id, state=session.state, ...)
+    async def worker():
+        async with session.lock:             # 同局回合及记忆严格串行
+            result = await run_game_turn(
+                session.state,
+                player_input,
+                store=session.store,
+                on_narrative_event=forward_ws,
+                on_turn_ready=on_turn_ready, # narrative_end 之后触发
+                on_game_over=on_game_over,   # state_update 之后才可触发
+            )                               # 随后在后台完成记忆提交
+            if result.settlement_skipped:
+                ready.set_result(result)
+
+    task = asyncio.create_task(worker())
+    session.track_background_task(task)      # 持有强引用
+    return await ready                       # 不等待慢摘要
 ```
 
 ### 3.2 回合号 / 年份注意点
 
 - `CivState.year` 在 `_apply_aggregated_to_state` 中按 `turn_years` 推进。
-- `CivState.turn`：确认 `resolve_full_turn` 是否递增；`--memory` 手测里有脚本化 `turn=`。接线时**统一**「先结算再 `turn += 1`」或「结算内递增」，并与 `commit_turn_memory(turn=...)` 一致。
-- 建议在 Phase 4 开干前读一遍 `_apply_aggregated_to_state`（`action_resolver.py`）确认 turn 字段行为。
+- `CivState.turn` 与 `year` 均已由 `resolve_full_turn` 内部推进；API 和编排层
+  **不得再加一次**，只替换会话状态。
 
 ### 3.3 模糊输入（`is_too_vague`）
 
@@ -147,7 +112,7 @@ async def handle_action(game_id, player_input, ws_hub):
 | --- | --- |
 | LLM 判定 | ✅ `IntentResult` 字段齐全 |
 | `resolve_full_turn` | ✅ 全模糊跳过结算；部分模糊则跳过该子任务并可能把反问附在 narrative 后 |
-| HTTP 契约 | ⬜ 应用 `settlement_skipped` + `vague_prompts` 明确返回，前端进入「待澄清」态 |
+| HTTP 契约 | ✅ 已用 `settlement_skipped` + `vague_prompts` 明确返回，不推 WS 帧 |
 | 过时注释 | `parse_intent` 仍写 TODO — 接线时删掉以免误导 |
 
 ---
@@ -229,8 +194,10 @@ async def stream_narrative(hub, game_id, stream_id, payload: NarrationInput):
 
 ```
 resolve_full_turn 成功且 state_after 已写出
+  → narrative_end
+  → state_update（前端立即更新数值并解锁）
   → check_game_over(state_after)
-  → 若非 None：session.status = "game_over"；响应带 reason；拒绝后续 action
+  → 若非 None：session.status = "game_over"；推送 game_over；拒绝后续 action
 ```
 
 当前实现（`backend/engine/gameover.py`）：
@@ -246,16 +213,17 @@ return None
 
 ## 8. FastAPI 接线 TODO 清单（可当看板）
 
-- [ ] `main.py`：`include_router` game/action/websocket；CORS
-- [ ] 会话容器：`game_id → {state, store, status, seed}`
-- [ ] `POST /new` / `GET /{id}`
-- [ ] `POST /{id}/action` 编排（§3.1）
-- [ ] WS hub + 帧协议
-- [ ] `generate_narrative=False` + `narrate_stream` 替换同步叙事
-- [ ] `retrieve_history_context` + `commit_turn_memory` 接入 action
-- [ ] `check_game_over` 接入
+- [x] `main.py`：`include_router` game/action/websocket；CORS
+- [x] 会话容器：`game_id → {state, store, status, seed, lock, background_tasks}`
+- [x] `POST /new`
+- [ ] `GET /{id}`
+- [x] `POST /{id}/action` 编排（§3.1）
+- [x] WS hub + 纯流式帧协议
+- [x] `generate_narrative=False` + `narrate_stream` 替换同步叙事
+- [x] `retrieve_history_context` + `commit_turn_memory` 接入独立编排器
+- [x] `check_game_over` 接入
 - [ ] history / menu / save / load
-- [ ]（可选）回合结束后回填 `turns.narrative`
+- [x] 叙事结束后在提交记忆前回填 `FullTurnResult.narrative`
 - [ ] 删除/更正 `parse_intent` 过时 TODO 注释
 - [ ] 导出更新后的 `HANDOFF/openapi.json`
 
@@ -265,7 +233,7 @@ return None
 
 1. `POST /new`（`zhou`）→ 渲染状态面板  
 2. 连 WS  
-3. `POST /action` → 更新数值；WS 打字机叙事  
+3. `POST /action` → WS 打字机叙事 → `state_update` 更新数值并解锁
 4. 处理 `vague_prompts` UI  
 5. history 卷轴  
 6. save/load  
