@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import { ActionMenu, type ActionMenuItem } from "@/components/ActionMenu";
 import { emblemSrc } from "@/components/CivEmblem";
@@ -220,6 +220,7 @@ export default function Home() {
   );
   const narrativeEndRef = useRef<HTMLDivElement | null>(null);
   const pendingYearRef = useRef<number | null>(null);
+  const commandInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   function clearActionWaitTimer() {
     if (actionWaitTimerRef.current !== null) {
@@ -232,6 +233,25 @@ export default function Home() {
     clearActionWaitTimer();
     setAwaitingNarrative(false);
   }
+
+  /** 政令框随内容增高，上限约 6 行后内部滚动 */
+  function resizeCommandInput() {
+    const el = commandInputRef.current;
+    if (!el) {
+      return;
+    }
+    el.style.height = "auto";
+    const maxHeight = Number.parseFloat(getComputedStyle(el).maxHeight);
+    const next = Number.isFinite(maxHeight)
+      ? Math.min(el.scrollHeight, maxHeight)
+      : el.scrollHeight;
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > next + 1 ? "auto" : "hidden";
+  }
+
+  useEffect(() => {
+    resizeCommandInput();
+  }, [command]);
 
   useEffect(() => {
     narrativeEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -1008,16 +1028,26 @@ export default function Home() {
           <label className="sr-only" htmlFor="command">
             政令
           </label>
-          <input
+          <textarea
             id="command"
             name="command"
+            ref={commandInputRef}
             className="command-input"
-            type="text"
+            rows={1}
             value={command}
             onChange={(event) => setCommand(event.target.value)}
-            placeholder="可勾选多项政令，或直接输入……"
+            onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                if (!submitDisabled) {
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }
+            }}
+            placeholder="可勾选多项政令，或直接输入……（Enter 提交，Shift+Enter 换行）"
             disabled={inputDisabled}
             autoComplete="off"
+            wrap="soft"
           />
           <button
             type="submit"

@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { CivEmblem } from "@/components/CivEmblem";
 import {
@@ -171,15 +171,23 @@ function MetricRow({
 
 function PanelSection({
   title,
-  defaultOpen = false,
+  defaultOpen = true,
   children,
 }: {
   title: string;
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
+
   return (
-    <details className="status-section" open={defaultOpen}>
+    <details
+      className="status-section"
+      open={open}
+      onToggle={(event) => {
+        setOpen(event.currentTarget.open);
+      }}
+    >
       <summary className="status-section-summary">
         <span className="status-section-chevron" aria-hidden="true" />
         {title}
@@ -213,7 +221,7 @@ export function StatusPanel({
         </div>
       </div>
       <div className="status-panel-body">
-        <PanelSection title="物质基底" defaultOpen>
+        <PanelSection title="物质基底">
           <MetricRow label="人口">
             <StateMetric
               value={state.population.toLocaleString("zh-CN")}

@@ -33,8 +33,8 @@ const DOMAIN_ORDER = [
   "composite",
 ];
 
-/** 与后端 TaskSplitter 的「；」确定性拆分对齐 */
-export const ACTION_MENU_SEP = "；";
+/** 与后端 TaskSplitter 的换行/「；」确定性拆分对齐；换行在多行输入框更清晰 */
+export const ACTION_MENU_SEP = "\n";
 
 const OVERSELECT_HINT_THRESHOLD = 4;
 
@@ -69,7 +69,10 @@ function extractManualSuffix(command: string, menuPrefix: string): string {
     return command.trim();
   }
   if (command.startsWith(menuPrefix)) {
-    return command.slice(menuPrefix.length).replace(/^[；;，,\s]+/, "").trim();
+    return command
+      .slice(menuPrefix.length)
+      .replace(/^[；;，,\s]+/, "")
+      .trim();
   }
   return command.trim();
 }

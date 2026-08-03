@@ -8,14 +8,14 @@
   --desk-panel: #2a2218;
   --desk-grain: #332a1e;
 
-  /* 古纸 */
-  --parchment: #d4c5a0;
-  --parchment-dark: #c4b48a;
-  --parchment-light: #e0d4b0;
+  /* 古纸：略压暗一档，抬高正文对比 */
+  --parchment: #c4b68a;
+  --parchment-dark: #b09e72;
+  --parchment-light: #d0c198;
 
-  /* 文字 */
-  --ink: #2c1810;
-  --ink-muted: #5a4a3a;
+  /* 文字：浓墨正文，对比度 ≥ 7:1 */
+  --ink: #1a0e08;
+  --ink-muted: #322418;
   --ink-on-desk: #d4c5a0;
   --label-dim: #8a7a6a;
 
@@ -85,9 +85,10 @@ button:disabled {
 .app-shell {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  height: 100%;
   max-height: 100vh;
   max-height: 100dvh;
+  overflow: hidden; /* 整页不滚；滚动只发生在左右栏内部 */
 }
 
 .app-shell--landing {
@@ -226,30 +227,23 @@ button:disabled {
   border-color: var(--gold);
 }
 
-/* ---- Main grid：左面板 / 右叙事 ---- */
+/* ---- Main grid：左面板 / 右叙事（夹在顶栏与底部交互区之间） ---- */
 
 .main-grid {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(15rem, 0.9fr) minmax(0, 1.65fr);
   gap: 0.85rem;
   padding: 0.85rem;
-  align-items: start;
+  align-items: stretch;
+  overflow: hidden; /* 禁止内容侵入底部交互区 */
 }
 
 @media (max-width: 860px) {
   .main-grid {
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto;
-  }
-
-  .status-panel {
-    max-height: 42vh;
-  }
-
-  .narrative-scroll {
-    min-height: 18rem;
+    grid-template-rows: minmax(11rem, 0.42fr) minmax(14rem, 0.58fr);
   }
 }
 
@@ -301,10 +295,8 @@ button:disabled {
   position: relative;
   display: flex;
   flex-direction: column;
-  min-height: 22rem;
-  height: auto;
-  max-height: calc(100vh - 9.5rem);
-  max-height: calc(100dvh - 9.5rem);
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -382,7 +374,7 @@ button:disabled {
   align-items: center;
   gap: 0.55rem;
   margin-bottom: 0.65rem;
-  color: var(--gold-dim);
+  color: #6b5430; /* 标题层次：比正文淡、比次要装饰更稳 */
   font-size: 0.95rem;
   font-family: var(--font-display);
   letter-spacing: 0.06em;
@@ -442,13 +434,17 @@ button:disabled {
 
 .narrative-text {
   margin: 0;
+  color: var(--ink);
   font-family: var(--font-serif);
   font-size: 1.05rem;
   line-height: 1.95;
   letter-spacing: 0.05em;
-  font-weight: 400;
+  font-weight: 600;
   white-space: pre-wrap;
   word-break: break-word;
+  /* 浅底上避免 antialiased 把墨色冲淡 */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .narrative-text--streaming {
@@ -536,12 +532,11 @@ button:disabled {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  max-height: calc(100vh - 9.5rem);
-  max-height: calc(100dvh - 9.5rem);
+  height: 100%;
   background: var(--desk-panel);
   border: 2px solid var(--gold-dim);
   border-radius: var(--radius-soft);
-  overflow: hidden;
+  overflow: hidden; /* 滚动交给 .status-panel-body */
 }
 
 .status-panel-header {
@@ -598,6 +593,7 @@ button:disabled {
 }
 
 .status-section {
+  flex-shrink: 0; /* 不压缩内容；超出时由 .status-panel-body 滚动 */
   border: 1px solid var(--gold-dim);
   border-radius: var(--radius-soft);
   overflow: hidden;
@@ -738,6 +734,8 @@ button:disabled {
 /* ---- Command bar ---- */
 
 .command-stack {
+  position: relative;
+  z-index: 30; /* 始终压在左右栏之上，避免叙事区遮挡可选政令 */
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -749,13 +747,23 @@ button:disabled {
   flex-shrink: 0;
   display: flex;
   gap: 0.65rem;
-  align-items: stretch;
+  align-items: flex-end;
   padding: 0.55rem 0.95rem 0.95rem;
 }
 
 .command-input {
   flex: 1;
   min-width: 0;
+  /* 1 行起步，最高约 6 行；超出后内部滚动，底部区整体向上增高 */
+  --command-line-height: 1.5;
+  --command-pad-y: 1.4rem; /* padding-top + padding-bottom */
+  --command-lines-max: 6;
+  min-height: calc(1em * var(--command-line-height) + var(--command-pad-y));
+  max-height: calc(
+    1em * var(--command-line-height) * var(--command-lines-max) +
+      var(--command-pad-y)
+  );
+  height: auto;
   padding: 0.7rem 0.9rem;
   background: var(--parchment);
   color: var(--ink);
@@ -763,7 +771,11 @@ button:disabled {
   border-radius: var(--radius-soft);
   outline: none;
   font-family: var(--font-sans);
-  transition: border-color 0.15s ease;
+  font-size: 0.95rem;
+  line-height: var(--command-line-height);
+  resize: none;
+  overflow-y: hidden;
+  transition: border-color 0.15s ease, height 0.12s ease;
 }
 
 .command-input::placeholder {
@@ -781,6 +793,9 @@ button:disabled {
 .command-submit {
   flex-shrink: 0;
   min-width: 5.5rem;
+  align-self: flex-end;
+  /* 与单行 textarea 视觉对齐 */
+  min-height: calc(1em * 1.5 + 1.4rem + 4px);
 }
 
 /* ---- Action menu ---- */

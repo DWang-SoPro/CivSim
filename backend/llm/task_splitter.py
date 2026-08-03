@@ -2,7 +2,7 @@
 
 规则：
 - 输入 < 10 字符：直接当单任务，不调 LLM
-- 含明确「；」/「;」分隔的并列政令：确定性拆分，不调 LLM
+- 含明确「；」/「;」或换行分隔的并列政令：确定性拆分，不调 LLM
 - 含「和/并/同时/然后」等连接词，或跨越多个行动域才拆
 - 同一领域的细化描述不拆
 - 最多 4 个子任务
@@ -21,7 +21,8 @@ SHORT_INPUT_THRESHOLD = 10
 MAX_SUBTASKS = 4
 
 # 行动菜单多选组合使用的确定性分隔符（与前端 ACTION_MENU_SEP 对齐）
-EXPLICIT_SEP_RE = re.compile(r"[；;]+")
+# 支持「；」/「;」与换行，便于多行输入框按行组合政令
+EXPLICIT_SEP_RE = re.compile(r"(?:[；;]+|\r?\n)+")
 
 TASK_SPLITTER_SYSTEM_PROMPT = """\
 你是文明模拟游戏「文明灵」的任务拆分器。玩家（统治集团）用自然语言下达政令。
@@ -120,13 +121,14 @@ def _single_task_result(player_input: str, reason: str) -> TaskSplitResult:
 
 
 def _split_by_explicit_separator(text: str) -> TaskSplitResult | None:
-    """若输入含「；」/「;」并列分隔，按片段确定性拆分（不调 LLM）。"""
+    """若输入含「；」/「;」或换行并列分隔，按片段确定性拆分（不调 LLM）。"""
     if not EXPLICIT_SEP_RE.search(text):
         return None
     parts = [p.strip() for p in EXPLICIT_SEP_RE.split(text) if p.strip()]
     if len(parts) <= 1:
         return None
     capped = parts[:MAX_SUBTASKS]
+    sep_label = "换行" if "\n" in text or "\r" in text else "「；」"
     return TaskSplitResult(
         is_multi_task=True,
         subtasks=[
@@ -139,7 +141,7 @@ def _split_by_explicit_separator(text: str) -> TaskSplitResult | None:
             for i, part in enumerate(capped, start=1)
         ],
         split_reason=(
-            f"输入以「；」分隔为 {len(parts)} 段政令"
+            f"输入以{sep_label}分隔为 {len(parts)} 段政令"
             + (f"，已保留前 {MAX_SUBTASKS} 段" if len(parts) > MAX_SUBTASKS else "")
         ),
     )
@@ -152,13 +154,13 @@ async def split_tasks(
     """将玩家输入拆分为子任务列表。
 
     输入去除首尾空白后长度 < 10 时直接返回单任务，不调用 LLM。
-    含明确「；」分隔时确定性拆分，不调用 LLM。
+    含明确「；」或换行分隔时确定性拆分，不调用 LLM。
     """
     text = player_input.strip()
     if not text:
         return _single_task_result("", "空输入，视为单任务")
 
-    # 明确「；」分隔优先于短输入短路，保证菜单多选组合总能拆开
+    # 明确分隔优先于短输入短路，保证菜单多选组合总能拆开
     explicit = _split_by_explicit_separator(text)
     if explicit is not None:
         return explicit
