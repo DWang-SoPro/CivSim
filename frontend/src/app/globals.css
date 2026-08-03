@@ -32,11 +32,10 @@
   --change-down: #c43c2c;
   --change-zero: #8a7a6a;
 
-  /* 字体：文楷标题 / 宋体叙事 / 黑体 UI */
-  --font-display: "LXGW WenKai", "KaiTi", cursive;
-  --font-serif: var(--font-narrative), "Source Han Serif SC", "Noto Serif SC",
-    "SimSun", serif;
-  --font-sans: var(--font-ui), "Source Han Sans SC", "PingFang SC", sans-serif;
+  /* 字体：由 next/font/local 注入变量（已含 fallback）；此处不再重复堆叠 */
+  --font-display: var(--font-display-face);
+  --font-serif: var(--font-narrative);
+  --font-sans: var(--font-ui);
 
   --radius-soft: 4px;
   --noise-svg: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
@@ -846,6 +845,18 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+.action-menu-hint {
+  margin: 0.25rem 0 0.45rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px dashed rgba(196, 60, 44, 0.45);
+  border-radius: var(--radius-soft);
+  color: #e0a090;
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  background: rgba(139, 37, 0, 0.12);
+}
+
 .action-menu-domain {
   margin-top: 0.55rem;
 }
@@ -876,8 +887,7 @@ button:disabled {
   width: 100%;
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.45rem;
   padding: 0.4rem 0.5rem;
   border: 1px solid transparent;
   border-radius: var(--radius-soft);
@@ -886,7 +896,7 @@ button:disabled {
   cursor: pointer;
   text-align: left;
   font-family: var(--font-sans);
-  transition: border-color 0.12s ease, background 0.12s ease;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
 }
 
 .action-menu-item:hover:not(:disabled) {
@@ -894,18 +904,43 @@ button:disabled {
   background: rgba(197, 165, 90, 0.08);
 }
 
+.action-menu-item--selected {
+  border-color: var(--gold);
+  background: rgba(197, 165, 90, 0.14);
+  color: var(--gold);
+}
+
+.action-menu-item--selected:hover:not(:disabled) {
+  border-color: var(--gold);
+  background: rgba(197, 165, 90, 0.18);
+}
+
 .action-menu-item:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
 
+.action-menu-item-check {
+  flex-shrink: 0;
+  width: 1rem;
+  color: var(--gold-dim);
+  font-size: 0.85rem;
+  line-height: 1.2;
+}
+
+.action-menu-item--selected .action-menu-item-check {
+  color: var(--gold);
+}
+
 .action-menu-item-name {
+  flex: 1;
   font-size: 0.9rem;
   letter-spacing: 0.02em;
 }
 
 .action-menu-difficulty {
   flex-shrink: 0;
+  margin-left: auto;
   font-size: 0.72rem;
   letter-spacing: 0.06em;
 }

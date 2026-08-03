@@ -2,12 +2,15 @@
 
 规则：
 - 输入 < 10 字符：直接当单任务，不调 LLM
+- 含明确「；」/「;」分隔的并列政令：确定性拆分，不调 LLM
 - 含「和/并/同时/然后」等连接词，或跨越多个行动域才拆
 - 同一领域的细化描述不拆
 - 最多 4 个子任务
 """
 
 from __future__ import annotations
+
+import re
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -17,13 +20,16 @@ from backend.llm.client import LLMClient, get_llm_client
 SHORT_INPUT_THRESHOLD = 10
 MAX_SUBTASKS = 4
 
+# 行动菜单多选组合使用的确定性分隔符（与前端 ACTION_MENU_SEP 对齐）
+EXPLICIT_SEP_RE = re.compile(r"[；;]+")
+
 TASK_SPLITTER_SYSTEM_PROMPT = """\
 你是文明模拟游戏「文明灵」的任务拆分器。玩家（统治集团）用自然语言下达政令。
 你的职责是判断这条输入是一个任务还是多个任务，必要时拆成子任务。
 
 拆分规则（严格遵守）：
 1. 仅在下列情况拆分：
-   - 输入含有明确连接词，如「和」「并」「同时」「然后」「接着」「另外」「以及」等，且连接的是不同行动；
+   - 输入含有明确连接词或分隔符，如「和」「并」「同时」「然后」「接着」「另外」「以及」「；」等，且连接的是不同行动；
    - 或输入明显跨越多个行动域（经济/政治/军事/文化/科技）。
 2. 同一领域的细化描述、手段说明、目的补充——不要拆。
    例：「兴修水利以灌溉农田」→ 单任务；「扩建城墙并加高箭楼」→ 单任务（同属军事/防御）。
@@ -37,36 +43,36 @@ TASK_SPLITTER_SYSTEM_PROMPT = """\
 
 确切 JSON 结构示例：
 {
-  "is_multi_task": true,
-  "subtasks": [
-    {
-      "id": "t1",
-      "description": "兴修水利工程",
-      "original_fragment": "兴修水利",
-      "priority": 1
-    },
-    {
-      "id": "t2",
-      "description": "扩建军队",
-      "original_fragment": "扩建军队",
-      "priority": 2
-    }
-  ],
-  "split_reason": "输入用「同时」「并」连接了经济与军事两类行动"
+    "is_multi_task": true,
+    "subtasks": [
+        {
+            "id": "t1",
+            "description": "兴修水利工程",
+            "original_fragment": "兴修水利",
+            "priority": 1
+        },
+        {
+            "id": "t2",
+            "description": "扩建军队",
+            "original_fragment": "扩建军队",
+            "priority": 2
+        }
+    ],
+    "split_reason": "输入用「同时」「并」连接了经济与军事两类行动"
 }
 
 单任务示例：
 {
-  "is_multi_task": false,
-  "subtasks": [
-    {
-      "id": "t1",
-      "description": "设立学宫培养人才",
-      "original_fragment": "设立学宫",
-      "priority": 1
-    }
-  ],
-  "split_reason": "单一文化/教育行动，无需拆分"
+    "is_multi_task": false,
+    "subtasks": [
+        {
+            "id": "t1",
+            "description": "设立学宫培养人才",
+            "original_fragment": "设立学宫",
+            "priority": 1
+        }
+    ],
+    "split_reason": "单一文化/教育行动，无需拆分"
 }
 """
 
@@ -113,6 +119,32 @@ def _single_task_result(player_input: str, reason: str) -> TaskSplitResult:
     )
 
 
+def _split_by_explicit_separator(text: str) -> TaskSplitResult | None:
+    """若输入含「；」/「;」并列分隔，按片段确定性拆分（不调 LLM）。"""
+    if not EXPLICIT_SEP_RE.search(text):
+        return None
+    parts = [p.strip() for p in EXPLICIT_SEP_RE.split(text) if p.strip()]
+    if len(parts) <= 1:
+        return None
+    capped = parts[:MAX_SUBTASKS]
+    return TaskSplitResult(
+        is_multi_task=True,
+        subtasks=[
+            SubTask(
+                id=f"t{i}",
+                description=part,
+                original_fragment=part,
+                priority=i,
+            )
+            for i, part in enumerate(capped, start=1)
+        ],
+        split_reason=(
+            f"输入以「；」分隔为 {len(parts)} 段政令"
+            + (f"，已保留前 {MAX_SUBTASKS} 段" if len(parts) > MAX_SUBTASKS else "")
+        ),
+    )
+
+
 async def split_tasks(
     player_input: str,
     client: LLMClient | None = None,
@@ -120,10 +152,16 @@ async def split_tasks(
     """将玩家输入拆分为子任务列表。
 
     输入去除首尾空白后长度 < 10 时直接返回单任务，不调用 LLM。
+    含明确「；」分隔时确定性拆分，不调用 LLM。
     """
     text = player_input.strip()
     if not text:
         return _single_task_result("", "空输入，视为单任务")
+
+    # 明确「；」分隔优先于短输入短路，保证菜单多选组合总能拆开
+    explicit = _split_by_explicit_separator(text)
+    if explicit is not None:
+        return explicit
 
     if len(text) < SHORT_INPUT_THRESHOLD:
         return _single_task_result(text, f"输入不足 {SHORT_INPUT_THRESHOLD} 字符，直接视为单任务")

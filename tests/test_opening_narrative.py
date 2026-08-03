@@ -88,15 +88,33 @@ def test_opening_retries_once_when_first_draft_has_wrong_length() -> None:
 
     assert result == VALID_OPENING
     assert len(fake.calls) == 2
-    assert "不符合" in fake.calls[1][0][-1]["content"]
+    assert "偏短" in fake.calls[1][0][-1]["content"]
     assert "150–250" in fake.calls[1][0][-1]["content"]
+
+
+def test_opening_accepts_soft_overage_near_target_max() -> None:
+    """略超目标上限（如 252）不应开局失败。"""
+    from backend.llm.opening import OPENING_ACCEPT_MAX_CHARS, opening_character_count
+
+    # 构造刚好落在 251–ACCEPT_MAX 的文稿
+    base = VALID_OPENING
+    while opening_character_count(base) <= OPENING_MAX_CHARS:
+        base += "余韵尚在。"
+    assert OPENING_MAX_CHARS < opening_character_count(base) <= OPENING_ACCEPT_MAX_CHARS
+
+    fake = FakeOpeningClient([base])
+    result = asyncio.run(
+        generate_opening_narrative(load_civ_state("zhou"), client=fake)
+    )
+    assert result == base
+    assert len(fake.calls) == 1
 
 
 def test_new_game_llm_failure_returns_503_without_orphan_session(
     monkeypatch: Any,
 ) -> None:
     sessions.clear()
-    fake = FakeOpeningClient(["太短", "仍然太短"])
+    fake = FakeOpeningClient(["太短", "仍然太短", "还是太短"])
     monkeypatch.setattr(opening, "get_llm_client", lambda: fake)
 
     try:
@@ -104,6 +122,6 @@ def test_new_game_llm_failure_returns_503_without_orphan_session(
             asyncio.run(new_game(NewGameRequest(template_id="zhou", seed=1)))
         assert exc_info.value.status_code == 503
         assert len(sessions) == 0
-        assert len(fake.calls) == 2
+        assert len(fake.calls) == 3
     finally:
         sessions.clear()

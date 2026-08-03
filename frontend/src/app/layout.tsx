@@ -1,23 +1,43 @@
 import type { Metadata } from "next";
-import { Noto_Sans_SC, Noto_Serif_SC } from "next/font/google";
+import localFont from "next/font/local";
 
 import "./globals.css";
 
-const notoSerifSC = Noto_Serif_SC({
-  weight: ["400", "600"],
-  subsets: ["latin"],
-  variable: "--font-narrative",
+/**
+ * 自托管完整简体中文字体（WOFF2）。
+ * next/font/local 自动注入 preload、hashed 路径与长期缓存。
+ * font-display: swap → 先系统 fallback，加载完无缝替换，避免白屏。
+ */
+const lxgwWenKai = localFont({
+  src: "../fonts/LXGWWenKai-Regular.woff2",
+  variable: "--font-display-face",
   display: "swap",
-  preload: false,
+  weight: "400",
+  style: "normal",
+  fallback: ["KaiTi", "STKaiti", "cursive"],
+  preload: true,
   adjustFontFallback: false,
 });
 
-const notoSansSC = Noto_Sans_SC({
-  weight: ["400", "700"],
-  subsets: ["latin"],
+const notoSerifSC = localFont({
+  src: "../fonts/NotoSerifSC-VF.woff2",
+  variable: "--font-narrative",
+  display: "swap",
+  weight: "200 900",
+  style: "normal",
+  fallback: ["Noto Serif SC", "SimSun", "Songti SC", "serif"],
+  preload: true,
+  adjustFontFallback: false,
+});
+
+const notoSansSC = localFont({
+  src: "../fonts/NotoSansSC-VF.woff2",
   variable: "--font-ui",
   display: "swap",
-  preload: false,
+  weight: "100 900",
+  style: "normal",
+  fallback: ["Noto Sans SC", "PingFang SC", "Microsoft YaHei", "sans-serif"],
+  preload: true,
   adjustFontFallback: false,
 });
 
@@ -32,17 +52,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN">
-      <head>
-        {/* 霞鹜文楷：标题/分区标题；CDN 加载，避免本地打包大字体文件 */}
-        <link
-          rel="stylesheet"
-          href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1/style.css"
-        />
-      </head>
-      <body className={`${notoSerifSC.variable} ${notoSansSC.variable}`}>
-        {children}
-      </body>
+    <html
+      lang="zh-CN"
+      className={`${lxgwWenKai.variable} ${notoSerifSC.variable} ${notoSansSC.variable}`}
+    >
+      <body>{children}</body>
     </html>
   );
 }

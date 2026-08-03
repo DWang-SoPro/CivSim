@@ -200,6 +200,8 @@ export default function Home() {
     useState<WebSocketStatus>("idle");
   const [menuItems, setMenuItems] = useState<ActionMenuItem[]>([]);
   const [menuLoading, setMenuLoading] = useState(false);
+  /** 递增以清空行动菜单勾选态（提交成功开始后 / 新局） */
+  const [menuSelectionResetKey, setMenuSelectionResetKey] = useState(0);
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [saveModalMode, setSaveModalMode] = useState<"save" | "load">("save");
   const [saves, setSaves] = useState<SaveListItem[]>([]);
@@ -522,6 +524,7 @@ export default function Home() {
     setGameId(result.game_id);
     setState(result.state);
     setCommand("");
+    setMenuSelectionResetKey((key) => key + 1);
     setGameOver(result.status === "game_over");
     setGameOverReason(result.game_over_reason ?? null);
     setGameOverReport(null);
@@ -721,6 +724,7 @@ export default function Home() {
     setSubmitting(true);
     setAwaitingNarrative(true);
     setCommand("");
+    setMenuSelectionResetKey((key) => key + 1);
     setError(null);
     setClarification([]);
     setDimensionChanges({});
@@ -996,7 +1000,9 @@ export default function Home() {
           items={menuItems}
           loading={menuLoading}
           disabled={inputDisabled}
-          onPick={(text) => setCommand(text)}
+          command={command}
+          selectionResetKey={menuSelectionResetKey}
+          onCompose={(text) => setCommand(text)}
         />
         <form className="command-bar" onSubmit={submitAction}>
           <label className="sr-only" htmlFor="command">
@@ -1009,7 +1015,7 @@ export default function Home() {
             type="text"
             value={command}
             onChange={(event) => setCommand(event.target.value)}
-            placeholder="请下达政令……"
+            placeholder="可勾选多项政令，或直接输入……"
             disabled={inputDisabled}
             autoComplete="off"
           />

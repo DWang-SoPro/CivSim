@@ -10,13 +10,15 @@ from backend.models.schemas import CivState
 
 OPENING_MIN_CHARS = 150
 OPENING_MAX_CHARS = 250
-OPENING_MAX_ATTEMPTS = 2
+# LLM 字数常有几十字漂移；硬失败阈值略宽，避免 252 这类边界直接开局失败
+OPENING_ACCEPT_MAX_CHARS = 280
+OPENING_MAX_ATTEMPTS = 3
 
 OPENING_SYSTEM_PROMPT = """\
 你是文明模拟游戏的史官旁白。根据用户提供的完整初始 CivState，为这个文明写一段开场背景。
 
 严格要求：
-- 正文 150–250 个中文字符，一到两段。
+- 正文约 150–250 个中文字符（宁可略短，不要明显超过 250），一到两段。
 - 用清楚的现代白话，保留少量史官的沉稳语气；不写文言，不用生僻词。
 - 自然交代时代与文明、人口土地与生产基础、统治与社会结构，以及当前最值得玩家留意的机遇或隐忧。
 - 要综合整份状态，不要把字段逐项念成清单，不要直接暴露英文字段名。
@@ -64,11 +66,13 @@ async def generate_opening_narrative(
     *,
     client: OpeningLLMClient | None = None,
 ) -> str:
-    """生成 150–250 字的白话史官开场。
+    """生成约 150–250 字的白话史官开场。
 
     默认使用项目配置的 ``LLMClient``（当前默认模型为
-    ``deepseek-v4-flash``），并显式关闭 thinking。首次字数不合格时
-    允许模型自我修订一次，避免机械截断正文。
+    ``deepseek-v4-flash``），并显式关闭 thinking。字数不合格时
+    允许模型自我修订；最终接受区间为
+    ``[OPENING_MIN_CHARS, OPENING_ACCEPT_MAX_CHARS]``，避免边界多几字
+    导致整局开场失败。
     """
     llm = client or get_llm_client()
     messages: list[dict[str, str]] = [
@@ -77,6 +81,7 @@ async def generate_opening_narrative(
     ]
 
     last_count = 0
+    last_narrative = ""
     for attempt in range(OPENING_MAX_ATTEMPTS):
         raw = await llm.call(
             messages,
@@ -85,26 +90,35 @@ async def generate_opening_narrative(
             max_tokens=512,
         )
         narrative = strip_code_fence(str(raw)).strip()
+        last_narrative = narrative
         last_count = opening_character_count(narrative)
-        if OPENING_MIN_CHARS <= last_count <= OPENING_MAX_CHARS:
+        if OPENING_MIN_CHARS <= last_count <= OPENING_ACCEPT_MAX_CHARS:
             return narrative
 
         if attempt + 1 < OPENING_MAX_ATTEMPTS:
+            if last_count > OPENING_MAX_CHARS:
+                guidance = (
+                    f"上一稿为 {last_count} 个非空白字符，偏长。"
+                    f"请压缩到 {OPENING_MIN_CHARS}–{OPENING_MAX_CHARS} 字，"
+                    "删去次要铺陈，仍只输出正文。"
+                )
+            else:
+                guidance = (
+                    f"上一稿为 {last_count} 个非空白字符，偏短。"
+                    f"请扩写到 {OPENING_MIN_CHARS}–{OPENING_MAX_CHARS} 字，"
+                    "补足时代、生产与统治结构，仍只输出正文。"
+                )
             messages.extend(
                 [
                     {"role": "assistant", "content": narrative},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"上一稿为 {last_count} 个非空白字符，不符合 "
-                            f"{OPENING_MIN_CHARS}–{OPENING_MAX_CHARS} 字要求。"
-                            "请在不改变事实的前提下重写，仍只输出正文。"
-                        ),
-                    },
+                    {"role": "user", "content": guidance},
                 ]
             )
 
     raise LLMError(
         "开场叙事字数校验失败："
-        f"要求 {OPENING_MIN_CHARS}–{OPENING_MAX_CHARS} 字，实际 {last_count} 字"
+        f"要求 {OPENING_MIN_CHARS}–{OPENING_ACCEPT_MAX_CHARS} 字"
+        f"（目标 {OPENING_MIN_CHARS}–{OPENING_MAX_CHARS}），"
+        f"实际 {last_count} 字"
+        + (f"：{last_narrative[:40]}…" if last_narrative else "")
     )
