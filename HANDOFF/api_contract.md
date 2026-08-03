@@ -20,10 +20,11 @@
 
 **已挂载路由：**
 
-- `backend/api/game.py` — prefix `/api/game`
-- `backend/api/action.py` — prefix `/api/game`
+- `backend/api/game.py` — prefix `/api/game`（new / menu / save / saves / load / debug/end）
+- `backend/api/action.py` — prefix `/api/game`（action）
 - `backend/api/websocket.py` — 无 prefix
 - `backend/main.py` — 注册健康检查、游戏、行动与 WebSocket 路由
+- 存档文件：`data/civsim.sqlite`（MVP，无需 PostgreSQL）
 
 ---
 
@@ -195,27 +196,31 @@ split+intent 已在 resolve_full_turn 内完成
 
 | | |
 | --- | --- |
-| 状态 | ⬜ 待接线 |
-| 内部 | `backend.templates.actions.generate_action_menu(state)` — **当前恒返回 `[]`** |
+| 状态 | ✅ 已实现 |
+| 内部 | `backend.templates.actions.generate_action_menu(state)` — 按前置条件筛选行动库 |
 
 **响应 `ActionMenuResponse`**
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `items` | `list[ActionMenuItem]` | 参考行动；点击后填入输入框，仍走自然语言 action |
+| `game_id` | `str` | |
+| `items` | `list[ActionMenuItem]` | 当前可用行动；点击后填入输入框，仍走自然语言 action |
 
-`ActionMenuItem`（建议）
+`ActionMenuItem`
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `id` | `str` | |
-| `label` | `str` | 展示名 |
+| `id` | `str` | 行动 ID |
+| `name` / `label` | `str` | 展示名 |
+| `domain` | `str` | `economic` \| `political` \| `military` \| `cultural` \| `technology` \| `composite` |
+| `domain_label` | `str` | 中文域名 |
+| `description` | `str` | 一句话说明 |
+| `difficulty_hint` | `str` | `容易` \| `中等` \| `困难` \| `极难` |
 | `suggested_input` | `str` | 填入输入栏的文本 |
-| `domain` | `str` | 领域标签 |
-| `disabled` | `bool` | 前置不满足时可灰显 |
-| `reason` | `str\|null` | 禁用理由 |
+| `disabled` | `bool` | 当前实现仅返回可用项，恒为 `false` |
+| `reason` | `str\|null` | 禁用理由（预留） |
 
-**错误：** `404`
+**错误：** `404` 局不存在
 
 ---
 
@@ -262,14 +267,15 @@ split+intent 已在 resolve_full_turn 内完成
 
 | | |
 | --- | --- |
-| 状态 | ⬜ 待接线 |
-| 内部 | 序列化 `CivState` + 记忆（turns/summaries/landmarks）→ `saves` 或复用 `games` 快照表（schema 见迁移；独立 saves 表 GDD 未单独建，Phase 4 可新增或用 JSON 文件） |
+| 状态 | ✅ 已实现（SQLite：`data/civsim.sqlite`） |
+| 内部 | 序列化 `CivState` + turns/summaries/landmarks + 会话峰值元数据 → `saves` 表 |
 
 **请求 `SaveGameRequest`**
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `slot_name` | `str\|null` | 可选存档名 |
+| `slot_name` | `str\|null` | 可选存档名；空则自动命名 |
+| `autosave` | `bool` | `true` 时覆盖本局自动档 |
 
 **响应 `SaveGameResponse`**
 
@@ -279,6 +285,8 @@ split+intent 已在 resolve_full_turn 内完成
 | `saved_at` | `str` (ISO8601) | |
 | `slot_name` | `str\|null` | |
 
+说明：每回合结算完成后会自动覆盖同一自动档；开局也会创建自动档。
+
 **错误：** `404` / `500`
 
 ---
@@ -287,9 +295,9 @@ split+intent 已在 resolve_full_turn 内完成
 
 | | |
 | --- | --- |
-| 状态 | ⬜ 待接线 |
+| 状态 | ✅ 已实现 |
 
-**响应：** `{ "saves": [ { "save_id", "slot_name", "civ_name", "template_id", "turn", "year", "saved_at" } ] }`
+**响应：** `{ "saves": [ { "save_id", "slot_name", "civ_name", "template_id", "turn", "year", "saved_at", "is_autosave" } ] }`
 
 ---
 
@@ -297,11 +305,27 @@ split+intent 已在 resolve_full_turn 内完成
 
 | | |
 | --- | --- |
-| 状态 | ⬜ 待接线 |
+| 状态 | ✅ 已实现 |
 
-**响应：** 同 `NewGameResponse`（新的或恢复的 `game_id` + `state`），或直接恢复原 `game_id`（二选一，建议：**恢复为新活跃会话并返回新 `game_id`**，避免并发写冲突）。
+**响应：** 同 `NewGameResponse`，并额外可选：
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `history` | `list[{turn,year,text}]\|null` | 叙事卷轴历史 |
+| `status` | `str\|null` | |
+| `game_over_reason` | `str\|null` | |
+| `autosave_id` | `str\|null` | |
+
+读档会创建**新的** `game_id` 活跃会话，避免并发写冲突。
 
 **错误：** `404` 存档不存在
+
+### 2.9 `POST /api/game/{id}/debug/end` — 强制终局（开发验收）
+
+| | |
+| --- | --- |
+| 状态 | ✅ 开发用 |
+| 说明 | 广播完整 `game_over` 帧（含历史教训），便于 UI 截图验收 |
 
 ---
 
@@ -340,9 +364,22 @@ split+intent 已在 resolve_full_turn 内完成
 | `narrative_delta` | `{ "text": "……" }` | 增量文本块（模型 token/片段，非固定字数） |
 | `narrative_end` | `{ "full_text": "……", "dimension_changes": {} }` | 结束信号；可用 `full_text` 做校验拼接 |
 | `state_update` | `{ "state": CivState, "dimension_changes": {} }` | 紧跟 `narrative_end`；最终数值已提交，客户端更新面板并立即解锁下一回合 |
-| `game_over` | `{ "reason": "…" }` | 仅终局检查命中时，在 `state_update` 之后发送 |
+| `game_over` | 见下表 | 仅终局检查命中时，在 `state_update` 之后发送 |
 | `narrative_error` | `{ "message": "…" }` | 流式失败；前端展示错误并允许重试（若实现） |
 | `ping` | `{}` | 心跳（可选） |
+
+`game_over.payload`：
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `reason` | `str` | `rebellion_out_of_control` \| `elite_collapse` \| `civilization_collapse` |
+| `reason_label` | `str` | 叛乱失控 / 精英瓦解 / 文明崩溃 |
+| `civ_name` | `str` | |
+| `total_turns` | `int` | |
+| `year_start` / `year_end` | `float` | |
+| `peak_population` / `peak_territory` | `int` | |
+| `achievements` | `list[{turn,year,title,summary}]` | 来自 landmarks |
+| `historical_lesson` | `str` | LLM 生成的 2–3 句反思（失败时回退固定文案） |
 
 **开始/结束硬性约定**
 

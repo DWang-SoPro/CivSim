@@ -63,6 +63,7 @@ class GameOverResult:
 
     state: CivState
     reason: str
+    payload: dict[str, Any] | None = None
 
 
 GameOverCallback = Callable[[GameOverResult], Awaitable[None] | None]
@@ -119,6 +120,9 @@ async def run_game_turn(
     on_narrative_event: NarrativeEventCallback | None = None,
     on_turn_ready: TurnReadyCallback | None = None,
     on_game_over: GameOverCallback | None = None,
+    initial_population: int | None = None,
+    rebellion_streak: int = 0,
+    elite_collapse_streak: int = 0,
 ) -> GameTurnResult:
     """运行一次完整回合，不依赖 FastAPI 或任何具体传输层。
 
@@ -226,7 +230,12 @@ async def run_game_turn(
         ),
     )
 
-    game_over_reason = check_game_over(state_after)
+    game_over_reason = check_game_over(
+        state_after,
+        initial_population=initial_population,
+        rebellion_streak=rebellion_streak,
+        elite_collapse_streak=elite_collapse_streak,
+    )
     if game_over_reason is not None:
         await _emit(
             on_game_over,

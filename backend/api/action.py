@@ -22,8 +22,14 @@ from backend.engine.orchestrator import (
     run_game_turn,
 )
 from backend.llm.client import LLMError
+from backend.llm.gameover_lesson import (
+    build_game_over_payload,
+    generate_historical_lesson,
+    landmarks_as_achievements,
+)
 from backend.llm.intent_parser import IntentResult
 from backend.models.schemas import CivState
+from backend.persistence.saves import create_or_update_save
 
 router = APIRouter(prefix="/api/game", tags=["action"])
 logger = logging.getLogger(__name__)
@@ -125,6 +131,8 @@ async def submit_action(
         nonlocal state_committed
         # resolve_full_turn 已推进 turn/year；API 只替换会话状态。
         session.state = state
+        session.update_peaks()
+        session.update_danger_streaks()
         state_committed = True
         session.status = "active"
         session.game_over_reason = None
@@ -164,15 +172,53 @@ async def submit_action(
     async def on_game_over(result: GameOverResult) -> None:
         session.status = "game_over"
         session.game_over_reason = result.reason
+        achievements = landmarks_as_achievements(session.store.get_all_landmarks())
+        achievement_titles = [
+            str(a.get("title") or "") for a in achievements if a.get("title")
+        ]
+        try:
+            lesson = await generate_historical_lesson(
+                result.state,
+                reason=result.reason,
+                total_turns=result.state.turn,
+                year_start=session.year_start,
+                year_end=result.state.year,
+                achievements=achievement_titles,
+            )
+        except Exception:
+            lesson = (
+                f"{result.state.civ_name}终因变故倾覆。"
+                "粮储、人心与制度三者失其一，社稷难久。"
+            )
+        payload = build_game_over_payload(
+            result.state,
+            reason=result.reason,
+            year_start=session.year_start,
+            peak_population=session.peak_population,
+            peak_territory=session.peak_territory,
+            achievements=achievements,
+            historical_lesson=lesson,
+        )
         await ws_hub.broadcast(
             key,
             {
                 "type": "game_over",
                 "turn": result.state.turn,
                 "stream_id": stream_id,
-                "payload": {"reason": result.reason},
+                "payload": payload,
             },
         )
+        # 终局再覆盖自动档
+        try:
+            save_id, _ = create_or_update_save(
+                session,
+                slot_name=f"{session.state.civ_name}·自动存档",
+                autosave=True,
+                save_id=session.autosave_id,
+            )
+            session.autosave_id = save_id
+        except Exception:
+            logger.warning("终局自动存档失败", exc_info=True)
 
     async def run_in_background() -> None:
         """串行运行完整编排，ready 后继续持锁完成记忆收尾。"""
@@ -209,6 +255,9 @@ async def submit_action(
                         on_narrative_event=forward,
                         on_turn_ready=on_turn_ready,
                         on_game_over=on_game_over,
+                        initial_population=session.initial_population,
+                        rebellion_streak=session.rebellion_streak,
+                        elite_collapse_streak=session.elite_collapse_streak,
                     )
 
                     if not ready_future.done():
@@ -230,6 +279,19 @@ async def submit_action(
                                 turn_result.state,
                                 turn_result.narrative,
                             )
+
+                    # 非模糊回合：结算后自动存档（覆盖自动档）
+                    if not turn_result.settlement_skipped:
+                        try:
+                            save_id, _ = create_or_update_save(
+                                session,
+                                slot_name=f"{session.state.civ_name}·自动存档",
+                                autosave=True,
+                                save_id=session.autosave_id,
+                            )
+                            session.autosave_id = save_id
+                        except Exception:
+                            logger.warning("回合自动存档失败", exc_info=True)
                 except LLMError as exc:
                     if state_committed:
                         session.finalization_error = f"{type(exc).__name__}: {exc}"

@@ -88,7 +88,7 @@ def test_run_game_turn_updates_once_writes_memory_and_checks_game_over(
     timeline: list[str] = []
     original_commit = orchestrator.commit_turn_memory
 
-    def fake_check_game_over(checked_state: Any) -> None:
+    def fake_check_game_over(checked_state: Any, **_: Any) -> None:
         timeline.append("game_over_check")
         game_over_checks.append(checked_state.turn)
         return None
@@ -164,7 +164,7 @@ def test_run_game_turn_vague_input_short_circuits_without_memory(
     events: list[NarrativeStreamEvent] = []
     game_over_checks: list[int] = []
 
-    def fake_check_game_over(checked_state: Any) -> None:
+    def fake_check_game_over(checked_state: Any, **_: Any) -> None:
         game_over_checks.append(checked_state.turn)
         return None
 

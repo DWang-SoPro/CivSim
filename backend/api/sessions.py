@@ -1,7 +1,6 @@
 """进程内游戏会话存储。
 
-MVP 阶段不做持久化：每局保存当前文明状态、记忆库和串行化回合的锁。
-应用重启或多 worker 部署时，这些数据不会在进程间共享。
+MVP：内存会话 + SQLite 存档（见 backend.persistence.saves）。
 """
 
 from __future__ import annotations
@@ -32,6 +31,27 @@ class GameSession:
         default_factory=set,
         repr=False,
     )
+    # 存档 / 终局统计
+    autosave_id: str | None = None
+    opening_narrative: str | None = None
+    year_start: float = 0.0
+    initial_population: int = 0
+    peak_population: int = 0
+    peak_territory: int = 0
+    rebellion_streak: int = 0
+    elite_collapse_streak: int = 0
+
+    def __post_init__(self) -> None:
+        if self.year_start == 0.0:
+            self.year_start = self.state.year
+        if self.initial_population == 0:
+            self.initial_population = self.state.population
+        if self.peak_population == 0:
+            self.peak_population = self.state.population
+        if self.peak_territory == 0:
+            self.peak_territory = (
+                self.state.territory_core + self.state.territory_frontier
+            )
 
     def next_rng_seed(self) -> int:
         """返回当前回合的可复现种子。
@@ -44,6 +64,34 @@ class GameSession:
         """持有后台回合任务的强引用，完成后自动移除。"""
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
+
+    def update_peaks(self) -> None:
+        """根据当前状态刷新峰值统计。"""
+        self.peak_population = max(self.peak_population, self.state.population)
+        territory = self.state.territory_core + self.state.territory_frontier
+        self.peak_territory = max(self.peak_territory, territory)
+
+    def update_danger_streaks(self) -> None:
+        """更新叛乱/精英瓦解连续计数（供 Game Over 判定）。"""
+        tension = (
+            self.state.class_tension
+            if self.state.class_tension is not None
+            else max(0.0, (100.0 - self.state.stability) / 100.0 * 0.7 + 0.15)
+        )
+        if tension > 0.8 and self.state.stability < 20:
+            self.rebellion_streak += 1
+        else:
+            self.rebellion_streak = 0
+
+        cohesion = (
+            self.state.elite_cohesion
+            if self.state.elite_cohesion is not None
+            else max(0.0, self.state.authority / 100.0 * 0.6 + 0.2)
+        )
+        if cohesion < 0.15:
+            self.elite_collapse_streak += 1
+        else:
+            self.elite_collapse_streak = 0
 
 
 class SessionRegistry:

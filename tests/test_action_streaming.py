@@ -204,12 +204,22 @@ def test_game_over_frame_follows_state_update(monkeypatch: Any) -> None:
         monkeypatch.setattr(action.ws_hub, "broadcast", broadcast)
         monkeypatch.setattr(action, "run_game_turn", fake_run_game_turn)
 
+        async def fake_lesson(*_a: Any, **_k: Any) -> str:
+            return "殷鉴不远，在夏后之世。"
+
+        monkeypatch.setattr(action, "generate_historical_lesson", fake_lesson)
+        monkeypatch.setattr(
+            action,
+            "create_or_update_save",
+            lambda *_a, **_k: ("save-1", "2026-01-01T00:00:00+00:00"),
+        )
+
         response = await asyncio.wait_for(
             submit_action(
                 UUID(session.game_id),
                 SubmitActionRequest(input="孤注一掷"),
             ),
-            timeout=1.0,
+            timeout=2.0,
         )
         pending = tuple(session.background_tasks)
         if pending:
@@ -224,7 +234,9 @@ def test_game_over_frame_follows_state_update(monkeypatch: Any) -> None:
             "state_update",
             "game_over",
         ]
-        assert frames[1]["payload"] == {"reason": "civilization_collapse"}
+        assert frames[1]["payload"]["reason"] == "civilization_collapse"
+        assert "historical_lesson" in frames[1]["payload"]
+        assert frames[1]["payload"]["civ_name"] == "西周王朝"
 
     try:
         asyncio.run(scenario())

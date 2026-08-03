@@ -2,41 +2,35 @@
 
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
-type CivState = {
-  civ_name: string;
-  template_id: string;
-  turn: number;
-  year: number;
-  population: number;
-  tech_agriculture: number;
-  tech_engineering: number;
-  tech_knowledge: number;
-  bureaucratization: number;
-  stability: number;
-  authority: number;
-  class_tension: number | null;
-  elite_cohesion: number | null;
+import { ActionMenu, type ActionMenuItem } from "@/components/ActionMenu";
+import { emblemSrc } from "@/components/CivEmblem";
+import {
+  GameOverOverlay,
+  type GameOverReport,
+} from "@/components/GameOverOverlay";
+import {
+  SaveLoadModal,
+  type SaveListItem,
+} from "@/components/SaveLoadModal";
+import {
+  StatusPanel,
+  type CivStateView,
+  type DimensionChanges,
+} from "@/components/StatusPanel";
+
+type CivState = CivStateView & {
   [key: string]: unknown;
 };
-
-type DimensionChanges = Record<string, string>;
-
-type ChangeableStateKey =
-  | "population"
-  | "stability"
-  | "authority"
-  | "class_tension"
-  | "elite_cohesion"
-  | "bureaucratization"
-  | "tech_agriculture"
-  | "tech_engineering"
-  | "tech_knowledge";
 
 type NewGameResponse = {
   game_id: string;
   state: CivState;
   seed: number;
   opening_narrative: string;
+  history?: Array<{ turn: number; year: number; text: string }> | null;
+  status?: string | null;
+  game_over_reason?: string | null;
+  autosave_id?: string | null;
 };
 
 type SubmitActionResponse = {
@@ -56,6 +50,15 @@ type NarrativePayload = {
   dimension_changes?: DimensionChanges;
   reason?: string | null;
   game_over_reason?: string | null;
+  reason_label?: string;
+  civ_name?: string;
+  total_turns?: number;
+  year_start?: number;
+  year_end?: number;
+  peak_population?: number;
+  peak_territory?: number;
+  achievements?: GameOverReport["achievements"];
+  historical_lesson?: string;
 };
 
 type NarrativeFrame =
@@ -91,6 +94,13 @@ type CompletedStream = {
 
 type WebSocketStatus = "idle" | "connecting" | "open" | "error";
 
+type NarrativeEntry = {
+  turn: number;
+  year: number;
+  text: string;
+  streaming?: boolean;
+};
+
 const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
 ).replace(/\/$/, "");
@@ -100,24 +110,14 @@ const WS_BASE_URL = API_BASE_URL.replace(/^http:/, "ws:").replace(
   "wss:",
 );
 
+/** 提交后等待首帧 / HTTP 结果的最长秒数；超时解除加载态并允许重试。 */
+const ACTION_WAIT_TIMEOUT_MS = 90_000;
+
 const websocketStatusLabel: Record<WebSocketStatus, string> = {
   idle: "未连接",
   connecting: "连接中",
   open: "已连接",
   error: "连接失败，正在重试",
-};
-
-const dimensionChangeKeys: Record<ChangeableStateKey, readonly string[]> = {
-  // food 是引擎基于人口增长率生成的趋势提示，CivState 无独立 food 字段。
-  population: ["population", "food"],
-  stability: ["stability"],
-  authority: ["authority"],
-  class_tension: ["class_tension"],
-  elite_cohesion: ["elite_cohesion"],
-  bureaucratization: ["bureaucratization"],
-  tech_agriculture: ["tech_agriculture"],
-  tech_engineering: ["tech_engineering"],
-  tech_knowledge: ["tech_knowledge"],
 };
 
 function formatErrorDetail(body: unknown, fallback: string): string {
@@ -140,78 +140,38 @@ async function readResponse<T>(response: Response): Promise<T> {
 }
 
 function formatYear(year: number): string {
-  return year < 0 ? `公元前 ${Math.abs(year)} 年` : `公元 ${year} 年`;
+  const rounded = Math.round(year);
+  return rounded < 0
+    ? `公元前${Math.abs(rounded)}年`
+    : `公元${rounded}年`;
 }
 
-function formatMetric(value: number | null): string {
-  if (value === null) {
-    return "—";
-  }
-
-  return String(Math.round(value * 100) / 100);
+function sealGlyph(civName: string): string {
+  const trimmed = civName.trim();
+  return trimmed ? trimmed[0]! : "史";
 }
 
-function getDimensionChange(
-  changes: DimensionChanges,
-  stateKey: ChangeableStateKey,
-): string | undefined {
-  for (const changeKey of dimensionChangeKeys[stateKey]) {
-    const change = changes[changeKey];
-    if (typeof change === "string" && change.trim()) {
-      return change.trim();
-    }
+function updateNarrativeEntry(
+  entries: NarrativeEntry[],
+  turn: number,
+  year: number,
+  updater: (text: string) => string,
+  streaming = true,
+): NarrativeEntry[] {
+  const index = entries.findIndex((entry) => entry.turn === turn);
+  if (index === -1) {
+    return [...entries, { turn, year, text: updater(""), streaming }];
   }
 
-  return undefined;
-}
-
-type ChangeDirection = "up" | "down" | "zero";
-
-function getChangeDirection(change: string): ChangeDirection {
-  const normalized = change.trim();
-  if (/^[+＋\-−－]?0(?:\.0+)?%?$/.test(normalized)) {
-    return "zero";
-  }
-  if (/^[+＋↑]/.test(normalized)) {
-    return "up";
-  }
-  if (/^[\-−－↓]/.test(normalized)) {
-    return "down";
-  }
-  return "zero";
-}
-
-function formatChangeAmount(change: string): string {
-  return change.trim().replace(/^[+＋\-−－↑↓]\s*/, "");
-}
-
-function StateMetric({
-  value,
-  change,
-}: {
-  value: string | number;
-  change?: string;
-}) {
-  if (!change) {
-    return <>{value}</>;
-  }
-
-  const direction = getChangeDirection(change);
-  const arrow = direction === "up" ? "↑" : direction === "down" ? "↓" : "→";
-  const amount = formatChangeAmount(change);
-  const directionLabel =
-    direction === "up" ? "上升" : direction === "down" ? "下降" : "无变化";
-
-  return (
-    <>
-      {value}
-      <span
-        className={`dimension-change dimension-change--${direction}`}
-        aria-label={`${directionLabel} ${amount}`}
-      >
-        {arrow}{amount}
-      </span>
-    </>
+  return entries.map((entry, i) =>
+    i === index
+      ? {
+          ...entry,
+          year,
+          text: updater(entry.text),
+          streaming,
+        }
+      : entry,
   );
 }
 
@@ -219,17 +179,32 @@ export default function Home() {
   const [gameId, setGameId] = useState<string | null>(null);
   const [state, setState] = useState<CivState | null>(null);
   const [command, setCommand] = useState("");
-  const [narrative, setNarrative] = useState("");
+  const [narrativeEntries, setNarrativeEntries] = useState<NarrativeEntry[]>(
+    [],
+  );
   const [dimensionChanges, setDimensionChanges] =
     useState<DimensionChanges>({});
   const [clarification, setClarification] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  /** 整回合锁：提交后到 state_update / 模糊短路 / 失败，防止重复提交。 */
   const [submitting, setSubmitting] = useState(false);
+  /** 提交→narrative_start（或 HTTP 短路/失败）的可见加载态。 */
+  const [awaitingNarrative, setAwaitingNarrative] = useState(false);
   const [gameOver, setGameOver] = useState(false);
   const [gameOverReason, setGameOverReason] = useState<string | null>(null);
+  const [gameOverReport, setGameOverReport] = useState<GameOverReport | null>(
+    null,
+  );
   const [websocketStatus, setWebsocketStatus] =
     useState<WebSocketStatus>("idle");
+  const [menuItems, setMenuItems] = useState<ActionMenuItem[]>([]);
+  const [menuLoading, setMenuLoading] = useState(false);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [saveModalMode, setSaveModalMode] = useState<"save" | "load">("save");
+  const [saves, setSaves] = useState<SaveListItem[]>([]);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
   const websocketRef = useRef<WebSocket | null>(null);
   const pendingActionRef = useRef<PendingAction | null>(null);
@@ -237,6 +212,28 @@ export default function Home() {
   const stateTurnRef = useRef<number | null>(null);
   const actionTokenRef = useRef(0);
   const websocketInterruptedRef = useRef(false);
+  const actionAbortRef = useRef<AbortController | null>(null);
+  const actionWaitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const narrativeEndRef = useRef<HTMLDivElement | null>(null);
+  const pendingYearRef = useRef<number | null>(null);
+
+  function clearActionWaitTimer() {
+    if (actionWaitTimerRef.current !== null) {
+      clearTimeout(actionWaitTimerRef.current);
+      actionWaitTimerRef.current = null;
+    }
+  }
+
+  function endAwaitingNarrative() {
+    clearActionWaitTimer();
+    setAwaitingNarrative(false);
+  }
+
+  useEffect(() => {
+    narrativeEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [narrativeEntries, awaitingNarrative, clarification]);
 
   useEffect(() => {
     if (!gameId) {
@@ -287,23 +284,45 @@ export default function Home() {
 
         if (frame.type === "game_over") {
           const completed = completedStreamRef.current;
+          const isDebug = frame.stream_id === "debug-end";
+          const matched =
+            completed &&
+            frame.turn === completed.turn &&
+            frame.stream_id === completed.streamId;
 
-          if (
-            !completed ||
-            frame.turn !== completed.turn ||
-            frame.stream_id !== completed.streamId
-          ) {
+          if (!isDebug && !matched) {
             return;
           }
 
           pendingActionRef.current = null;
+          endAwaitingNarrative();
           setSubmitting(false);
           setGameOver(true);
-          setGameOverReason(
-            frame.payload?.reason ??
-              frame.payload?.game_over_reason ??
-              "文明进程已结束。",
-          );
+          const payload = frame.payload;
+          const reason =
+            payload?.reason_label ??
+            payload?.reason ??
+            payload?.game_over_reason ??
+            "文明进程已结束。";
+          setGameOverReason(reason);
+          if (
+            payload &&
+            typeof payload.civ_name === "string" &&
+            typeof payload.historical_lesson === "string"
+          ) {
+            setGameOverReport({
+              reason: payload.reason ?? "civilization_collapse",
+              reason_label: payload.reason_label,
+              civ_name: payload.civ_name,
+              total_turns: payload.total_turns ?? frame.turn,
+              year_start: payload.year_start ?? 0,
+              year_end: payload.year_end ?? 0,
+              peak_population: payload.peak_population ?? 0,
+              peak_territory: payload.peak_territory ?? 0,
+              achievements: payload.achievements ?? [],
+              historical_lesson: payload.historical_lesson,
+            });
+          }
           return;
         }
 
@@ -318,21 +337,62 @@ export default function Home() {
           return;
         }
 
+        const yearForTurn =
+          pendingYearRef.current ??
+          (typeof frame.payload?.state?.year === "number"
+            ? frame.payload.state.year
+            : 0);
+
         switch (frame.type) {
           case "narrative_start":
-            setNarrative("");
+            // 首帧到达：处理中加载态结束，叙事开始流出；整回合锁仍保持到 state_update。
+            endAwaitingNarrative();
             setClarification([]);
+            setNarrativeEntries((entries) =>
+              updateNarrativeEntry(
+                entries,
+                pending.turn,
+                yearForTurn,
+                () => "",
+                true,
+              ),
+            );
             break;
           case "narrative_delta": {
             const text = frame.payload?.text;
             if (typeof text === "string") {
-              setNarrative((current) => current + text);
+              setNarrativeEntries((entries) =>
+                updateNarrativeEntry(
+                  entries,
+                  pending.turn,
+                  yearForTurn,
+                  (current) => current + text,
+                  true,
+                ),
+              );
             }
             break;
           }
           case "narrative_end":
             if (typeof frame.payload?.full_text === "string") {
-              setNarrative(frame.payload.full_text);
+              const fullText = frame.payload.full_text;
+              setNarrativeEntries((entries) =>
+                updateNarrativeEntry(
+                  entries,
+                  pending.turn,
+                  yearForTurn,
+                  () => fullText,
+                  false,
+                ),
+              );
+            } else {
+              setNarrativeEntries((entries) =>
+                entries.map((entry) =>
+                  entry.turn === pending.turn
+                    ? { ...entry, streaming: false }
+                    : entry,
+                ),
+              );
             }
             // 叙事结束不代表状态已提交；继续等 state_update。
             break;
@@ -344,14 +404,24 @@ export default function Home() {
             }
 
             stateTurnRef.current = nextState.turn;
+            pendingYearRef.current = nextState.year;
             completedStreamRef.current = {
               turn: pending.turn,
               streamId: pending.streamId,
             };
             pendingActionRef.current = null;
+            endAwaitingNarrative();
             setState(nextState);
             setDimensionChanges(frame.payload?.dimension_changes ?? {});
+            setNarrativeEntries((entries) =>
+              entries.map((entry) =>
+                entry.turn === pending.turn
+                  ? { ...entry, year: nextState.year, streaming: false }
+                  : entry,
+              ),
+            );
             setSubmitting(false);
+            void fetchActionMenu(gameId);
             if (websocketInterruptedRef.current) {
               setError("叙事连接曾中断；数值已恢复，但本回合叙事可能不完整。");
             }
@@ -361,7 +431,10 @@ export default function Home() {
           case "narrative_error":
             pendingActionRef.current = null;
             websocketInterruptedRef.current = false;
-            setError(frame.payload?.message ?? "叙事生成失败。");
+            endAwaitingNarrative();
+            setError(
+              `${frame.payload?.message ?? "叙事生成失败。"}请修改或重试政令。`,
+            );
             setSubmitting(false);
             break;
         }
@@ -403,10 +476,88 @@ export default function Home() {
     };
   }, [gameId]);
 
+  useEffect(() => {
+    return () => {
+      clearActionWaitTimer();
+      actionAbortRef.current?.abort();
+    };
+  }, []);
+
+  async function fetchActionMenu(nextGameId: string) {
+    setMenuLoading(true);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/game/${encodeURIComponent(nextGameId)}/menu`,
+      );
+      const result = await readResponse<{ items: ActionMenuItem[] }>(response);
+      setMenuItems(result.items ?? []);
+    } catch {
+      setMenuItems([]);
+    } finally {
+      setMenuLoading(false);
+    }
+  }
+
+  async function refreshSaves() {
+    const response = await fetch(`${API_BASE_URL}/api/game/saves`);
+    const result = await readResponse<{ saves: SaveListItem[] }>(response);
+    setSaves(result.saves ?? []);
+  }
+
+  function applyLoadedGame(result: NewGameResponse) {
+    const previousWebsocket = websocketRef.current;
+    websocketRef.current = null;
+    previousWebsocket?.close();
+
+    pendingActionRef.current = null;
+    completedStreamRef.current = null;
+    websocketInterruptedRef.current = false;
+    actionAbortRef.current?.abort();
+    actionAbortRef.current = null;
+    clearActionWaitTimer();
+    stateTurnRef.current = result.state.turn;
+    pendingYearRef.current = result.state.year;
+    actionTokenRef.current += 1;
+
+    setGameId(result.game_id);
+    setState(result.state);
+    setCommand("");
+    setGameOver(result.status === "game_over");
+    setGameOverReason(result.game_over_reason ?? null);
+    setGameOverReport(null);
+    setClarification([]);
+    setDimensionChanges({});
+    setAwaitingNarrative(false);
+    setSubmitting(false);
+
+    if (result.history && result.history.length > 0) {
+      setNarrativeEntries(
+        result.history.map((item) => ({
+          turn: item.turn,
+          year: item.year,
+          text: item.text,
+          streaming: false,
+        })),
+      );
+    } else {
+      setNarrativeEntries([
+        {
+          turn: result.state.turn === 0 ? 0 : result.state.turn,
+          year: result.state.year,
+          text: result.opening_narrative,
+          streaming: false,
+        },
+      ]);
+    }
+
+    void fetchActionMenu(result.game_id);
+  }
+
   async function createGame() {
     setCreating(true);
     setError(null);
     setDimensionChanges({});
+    setGameOverReport(null);
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/game/new`, {
@@ -415,32 +566,108 @@ export default function Home() {
         body: JSON.stringify({ template_id: "zhou", seed: null }),
       });
       const result = await readResponse<NewGameResponse>(response);
-
-      const previousWebsocket = websocketRef.current;
-      websocketRef.current = null;
-      previousWebsocket?.close();
-
-      pendingActionRef.current = null;
-      completedStreamRef.current = null;
-      websocketInterruptedRef.current = false;
-      stateTurnRef.current = result.state.turn;
-      actionTokenRef.current += 1;
-
-      setGameId(result.game_id);
-      setState(result.state);
-      setCommand("");
-      setNarrative(result.opening_narrative);
-      setClarification([]);
-      setSubmitting(false);
-      setGameOver(false);
-      setGameOverReason(null);
-      setWebsocketStatus("connecting");
+      applyLoadedGame(result);
+      setError(null);
     } catch (requestError) {
-      setError(
-        requestError instanceof Error ? requestError.message : "新建游戏失败。",
-      );
+      const message =
+        requestError instanceof Error ? requestError.message : "开局失败";
+      setError(message);
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function openSaveModal() {
+    setSaveModalMode("save");
+    setSaveMessage(null);
+    setSaveModalOpen(true);
+  }
+
+  async function openLoadModal() {
+    setSaveModalMode("load");
+    setSaveMessage(null);
+    setSaveBusy(true);
+    setSaveModalOpen(true);
+    try {
+      await refreshSaves();
+    } catch (requestError) {
+      const message =
+        requestError instanceof Error ? requestError.message : "无法列出存档";
+      setSaveMessage(message);
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
+  async function confirmSave() {
+    if (!gameId) {
+      return;
+    }
+    setSaveBusy(true);
+    setSaveMessage(null);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/game/${encodeURIComponent(gameId)}/save`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slot_name: null, autosave: false }),
+        },
+      );
+      const result = await readResponse<{
+        save_id: string;
+        saved_at: string;
+        slot_name: string | null;
+      }>(response);
+      setSaveMessage(`已保存：${result.slot_name ?? result.save_id}`);
+      await refreshSaves();
+    } catch (requestError) {
+      const message =
+        requestError instanceof Error ? requestError.message : "存档失败";
+      setSaveMessage(message);
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
+  async function loadSave(saveId: string) {
+    setSaveBusy(true);
+    setSaveMessage(null);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/game/load/${encodeURIComponent(saveId)}`,
+        { method: "POST" },
+      );
+      const result = await readResponse<NewGameResponse>(response);
+      applyLoadedGame(result);
+      setSaveModalOpen(false);
+      setError(null);
+    } catch (requestError) {
+      const message =
+        requestError instanceof Error ? requestError.message : "读档失败";
+      setSaveMessage(message);
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
+  async function loadLatestAutosave() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/game/saves`);
+      const result = await readResponse<{ saves: SaveListItem[] }>(response);
+      const list = result.saves ?? [];
+      setSaves(list);
+      const latest =
+        list.find((item) => item.is_autosave) ?? list[0] ?? null;
+      if (!latest) {
+        setError("没有可读取的存档。");
+        return;
+      }
+      await loadSave(latest.save_id);
+    } catch (requestError) {
+      const message =
+        requestError instanceof Error ? requestError.message : "读档失败";
+      setError(message);
     }
   }
 
@@ -455,6 +682,7 @@ export default function Home() {
       !playerInput ||
       creating ||
       submitting ||
+      awaitingNarrative ||
       pendingActionRef.current !== null ||
       gameOver ||
       websocketStatus !== "open"
@@ -470,7 +698,28 @@ export default function Home() {
       streamId,
     };
     websocketInterruptedRef.current = false;
+    actionAbortRef.current?.abort();
+    const abortController = new AbortController();
+    actionAbortRef.current = abortController;
+    clearActionWaitTimer();
+    actionWaitTimerRef.current = setTimeout(() => {
+      actionWaitTimerRef.current = null;
+      const pending = pendingActionRef.current;
+      if (!pending || pending.token !== token) {
+        return;
+      }
+
+      abortController.abort();
+      pendingActionRef.current = null;
+      websocketInterruptedRef.current = false;
+      setAwaitingNarrative(false);
+      setSubmitting(false);
+      setCommand(playerInput);
+      setError("处理超时，请重试政令。");
+    }, ACTION_WAIT_TIMEOUT_MS);
+
     setSubmitting(true);
+    setAwaitingNarrative(true);
     setCommand("");
     setError(null);
     setClarification([]);
@@ -487,6 +736,7 @@ export default function Home() {
             rng_seed: null,
             stream_id: streamId,
           }),
+          signal: abortController.signal,
         },
       );
       const result = await readResponse<SubmitActionResponse>(response);
@@ -500,8 +750,8 @@ export default function Home() {
       if (result.settlement_skipped) {
         pendingActionRef.current = null;
         websocketInterruptedRef.current = false;
+        endAwaitingNarrative();
         setError(null);
-        setNarrative("");
         setClarification(
           result.vague_prompts?.length
             ? result.vague_prompts
@@ -513,14 +763,16 @@ export default function Home() {
 
       if (result.turn !== pending.turn || result.state.turn !== pending.turn) {
         pendingActionRef.current = null;
-        setError("服务端返回了意外的回合号。");
+        endAwaitingNarrative();
+        setError("服务端返回了意外的回合号。请重试政令。");
         setSubmitting(false);
         return;
       }
 
       if (result.ws_stream_id !== pending.streamId) {
         pendingActionRef.current = null;
-        setError("服务端返回了意外的叙事流 ID。");
+        endAwaitingNarrative();
+        setError("服务端返回了意外的叙事流 ID。请重试政令。");
         setSubmitting(false);
         return;
       }
@@ -528,14 +780,24 @@ export default function Home() {
       // 正常情况下 state_update 会先完成回合；若 WebSocket 中断而该帧
       // 丢失，则以同一 stream_id 的 HTTP 权威快照恢复，避免前后端错回合。
       stateTurnRef.current = result.state.turn;
+      pendingYearRef.current = result.state.year;
       completedStreamRef.current = {
         turn: pending.turn,
         streamId: pending.streamId,
       };
       pendingActionRef.current = null;
+      endAwaitingNarrative();
       setState(result.state);
       setDimensionChanges(result.dimension_changes);
+      setNarrativeEntries((entries) =>
+        entries.map((entry) =>
+          entry.turn === pending.turn
+            ? { ...entry, year: result.state.year, streaming: false }
+            : entry,
+        ),
+      );
       setSubmitting(false);
+      void fetchActionMenu(gameId);
       if (websocketInterruptedRef.current) {
         setError("叙事连接曾中断；数值已恢复，但本回合叙事可能不完整。");
       }
@@ -546,163 +808,238 @@ export default function Home() {
         return;
       }
 
+      // 超时路径已在 timer 里恢复 UI；此处避免覆盖超时文案。
+      if (abortController.signal.aborted) {
+        return;
+      }
+
       pendingActionRef.current = null;
       websocketInterruptedRef.current = false;
+      endAwaitingNarrative();
       setCommand(playerInput);
+      const message =
+        requestError instanceof Error
+          ? requestError.message
+          : "政令提交失败";
       setError(
-        requestError instanceof Error ? requestError.message : "政令提交失败。",
+        message.endsWith("。")
+          ? `${message}请重试政令。`
+          : `${message}。请重试政令。`,
       );
       setSubmitting(false);
+    } finally {
+      if (actionAbortRef.current === abortController) {
+        actionAbortRef.current = null;
+      }
     }
   }
 
+  if (!state || !gameId) {
+    return (
+      <main className="app-shell app-shell--landing">
+        <h1 className="landing-brand">文明灵</h1>
+        <p className="landing-sub">CivSim · 史官卷轴</p>
+        {error && (
+          <p className="banner banner--error" role="alert">
+            {error}
+          </p>
+        )}
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={createGame}
+          disabled={creating}
+        >
+          {creating ? "开局中……" : "新建游戏（西周）"}
+        </button>
+      </main>
+    );
+  }
+
+  const inputDisabled = creating || submitting || gameOver;
+  const submitDisabled =
+    inputDisabled ||
+    websocketStatus !== "open" ||
+    command.trim().length === 0;
+
   return (
-    <main>
-      <h1>文明灵 CivSim v2</h1>
+    <main className="app-shell">
+      <header className="top-bar">
+        <div className="seal" aria-hidden="true">
+          {sealGlyph(state.civ_name)}
+        </div>
+        <div className="top-bar-meta">
+          <h1 className="civ-name">{state.civ_name}</h1>
+          <span className="top-meta-item">{formatYear(state.year)}</span>
+          <span className="top-meta-item">第{state.turn}回合</span>
+        </div>
+        <div className="top-bar-actions">
+          <span className="ws-status" title="叙事连接状态">
+            {websocketStatusLabel[websocketStatus]}
+          </span>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => void openSaveModal()}
+            disabled={creating || submitting}
+          >
+            存档
+          </button>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => void openLoadModal()}
+            disabled={creating || submitting}
+          >
+            读档
+          </button>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={createGame}
+            disabled={creating || submitting}
+          >
+            {creating ? "开局中……" : "新局"}
+          </button>
+        </div>
+      </header>
 
-      <button type="button" onClick={createGame} disabled={creating || submitting}>
-        {creating ? "新建中……" : "新建游戏（西周）"}
-      </button>
-
-      {error && <p role="alert">错误：{error}</p>}
-      {gameOver && (
-        <p role="status">游戏结束：{gameOverReason ?? "文明进程已结束。"}</p>
+      {error && (
+        <p className="banner banner--error" role="alert">
+          {error}
+        </p>
+      )}
+      {gameOver && !gameOverReport && (
+        <p className="banner banner--status" role="status">
+          游戏结束：{gameOverReason ?? "文明进程已结束。"}
+        </p>
       )}
 
-      {state && gameId && (
-        <>
-          <section>
-            <h2>当前状态</h2>
-            <dl>
-              <dt>文明</dt>
-              <dd>{state.civ_name}</dd>
-              <dt>年份</dt>
-              <dd>{formatYear(state.year)}</dd>
-              <dt>回合</dt>
-              <dd>{state.turn}</dd>
-              <dt>人口</dt>
-              <dd>
-                <StateMetric
-                  value={state.population.toLocaleString("zh-CN")}
-                  change={getDimensionChange(dimensionChanges, "population")}
-                />
-              </dd>
-              <dt>稳定</dt>
-              <dd>
-                <StateMetric
-                  value={formatMetric(state.stability)}
-                  change={getDimensionChange(dimensionChanges, "stability")}
-                />
-              </dd>
-              <dt>统治力</dt>
-              <dd>
-                <StateMetric
-                  value={formatMetric(state.authority)}
-                  change={getDimensionChange(dimensionChanges, "authority")}
-                />
-              </dd>
-              <dt>阶级张力</dt>
-              <dd>
-                <StateMetric
-                  value={formatMetric(state.class_tension)}
-                  change={getDimensionChange(dimensionChanges, "class_tension")}
-                />
-              </dd>
-              <dt>精英凝聚力</dt>
-              <dd>
-                <StateMetric
-                  value={formatMetric(state.elite_cohesion)}
-                  change={getDimensionChange(dimensionChanges, "elite_cohesion")}
-                />
-              </dd>
-              <dt>官僚化</dt>
-              <dd>
-                <StateMetric
-                  value={formatMetric(state.bureaucratization)}
-                  change={getDimensionChange(
-                    dimensionChanges,
-                    "bureaucratization",
-                  )}
-                />
-              </dd>
-              <dt>农业技术</dt>
-              <dd>
-                <StateMetric
-                  value={formatMetric(state.tech_agriculture)}
-                  change={getDimensionChange(
-                    dimensionChanges,
-                    "tech_agriculture",
-                  )}
-                />
-              </dd>
-              <dt>工程技术</dt>
-              <dd>
-                <StateMetric
-                  value={formatMetric(state.tech_engineering)}
-                  change={getDimensionChange(
-                    dimensionChanges,
-                    "tech_engineering",
-                  )}
-                />
-              </dd>
-              <dt>知识技术</dt>
-              <dd>
-                <StateMetric
-                  value={formatMetric(state.tech_knowledge)}
-                  change={getDimensionChange(
-                    dimensionChanges,
-                    "tech_knowledge",
-                  )}
-                />
-              </dd>
-            </dl>
-            <p>叙事连接：{websocketStatusLabel[websocketStatus]}</p>
-          </section>
+      <div className="main-grid">
+        <StatusPanel state={state} dimensionChanges={dimensionChanges} />
 
-          <section>
-            <h2>下达政令</h2>
-            <form onSubmit={submitAction}>
-              <label htmlFor="command">政令：</label>
-              <input
-                id="command"
-                name="command"
-                type="text"
-                value={command}
-                onChange={(event) => setCommand(event.target.value)}
-                placeholder="兴修水利"
-                disabled={creating || submitting || gameOver}
-              />
-              <button
-                type="submit"
-                disabled={
-                  creating ||
-                  submitting ||
-                  gameOver ||
-                  websocketStatus !== "open" ||
-                  command.trim().length === 0
-                }
-              >
-                {submitting ? "执行中……" : "执行"}
-              </button>
-            </form>
-          </section>
+        <section className="narrative-scroll parchment" aria-label="史官叙事">
+          <div className="narrative-watermark" aria-hidden="true">
+            <img
+              src={emblemSrc(state.template_id)}
+              alt=""
+              width={320}
+              height={320}
+              draggable={false}
+            />
+          </div>
 
-          {clarification.length > 0 && (
-            <section aria-live="polite">
-              <h2>需要说明</h2>
-              <ul>
+          <div className="narrative-scroll-inner">
+            {narrativeEntries.length === 0 ? (
+              <p className="narrative-empty">尚无叙事。</p>
+            ) : (
+              narrativeEntries.map((entry, index) => (
+                <article
+                  key={`${entry.turn}-${index}`}
+                  className="narrative-entry"
+                >
+                  {index > 0 && (
+                    <div className="gold-divider" aria-hidden="true">
+                      <span className="gold-divider-mark" />
+                      <span className="gold-divider-mark" />
+                    </div>
+                  )}
+                  <div className="narrative-year">
+                    <span className="narrative-year-end" aria-hidden="true" />
+                    <span>
+                      {formatYear(entry.year)}
+                      {entry.turn === 0
+                        ? " · 开局"
+                        : ` · 第${entry.turn}回合`}
+                    </span>
+                    <span className="narrative-year-end" aria-hidden="true" />
+                  </div>
+                  <p
+                    className={`narrative-text${
+                      entry.streaming ? " narrative-text--streaming" : ""
+                    }`}
+                  >
+                    {entry.text || (entry.streaming ? "" : "……")}
+                  </p>
+                </article>
+              ))
+            )}
+
+            {clarification.length > 0 && (
+              <aside className="scribe-ask" aria-live="polite">
+                <p className="scribe-ask-label">史官问曰</p>
                 {clarification.map((prompt, index) => (
-                  <li key={`${index}-${prompt}`}>{prompt}</li>
+                  <blockquote
+                    key={`${index}-${prompt}`}
+                    className="scribe-ask-quote"
+                  >
+                    「{prompt}」
+                  </blockquote>
                 ))}
-              </ul>
-            </section>
-          )}
+                <p className="scribe-ask-hint">请把政令说得更具体一些，再行下达。</p>
+              </aside>
+            )}
 
-          <section aria-live="polite">
-            <h2>史官叙事</h2>
-            <p>{narrative || "尚无叙事。"}</p>
-          </section>
-        </>
+            <div ref={narrativeEndRef} />
+          </div>
+
+          {awaitingNarrative && (
+            <p className="scribe-status" role="status" aria-live="polite">
+              史官执笔中……
+            </p>
+          )}
+        </section>
+      </div>
+
+      <div className="command-stack">
+        <ActionMenu
+          items={menuItems}
+          loading={menuLoading}
+          disabled={inputDisabled}
+          onPick={(text) => setCommand(text)}
+        />
+        <form className="command-bar" onSubmit={submitAction}>
+          <label className="sr-only" htmlFor="command">
+            政令
+          </label>
+          <input
+            id="command"
+            name="command"
+            className="command-input"
+            type="text"
+            value={command}
+            onChange={(event) => setCommand(event.target.value)}
+            placeholder="请下达政令……"
+            disabled={inputDisabled}
+            autoComplete="off"
+          />
+          <button
+            type="submit"
+            className="btn-primary command-submit"
+            disabled={submitDisabled}
+          >
+            {submitting ? "执行中" : "执行"}
+          </button>
+        </form>
+      </div>
+
+      <SaveLoadModal
+        open={saveModalOpen}
+        mode={saveModalMode}
+        saves={saves}
+        loading={saveBusy}
+        message={saveMessage}
+        onClose={() => setSaveModalOpen(false)}
+        onConfirmSave={() => void confirmSave()}
+        onLoad={(saveId) => void loadSave(saveId)}
+      />
+
+      {gameOver && gameOverReport && (
+        <GameOverOverlay
+          report={gameOverReport}
+          onLoadLatest={() => void loadLatestAutosave()}
+          onNewGame={() => void createGame()}
+        />
       )}
     </main>
   );

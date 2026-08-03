@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+  <!-- Placeholder round seal: dual ring + octagram -->
+  <circle cx="32" cy="32" r="26" stroke="#c5a55a" stroke-width="1.5"/>
+  <circle cx="32" cy="32" r="18" stroke="#c5a55a" stroke-width="1" opacity="0.85"/>
+  <path
+    d="M32 10 L35 26 L50 22 L38 32 L50 42 L35 38 L32 54 L29 38 L14 42 L26 32 L14 22 L29 26 Z"
+    stroke="#c5a55a"
+    stroke-width="1.2"
+    stroke-linejoin="round"
+  />
+  <circle cx="32" cy="32" r="4" stroke="#c5a55a" stroke-width="1.2"/>
+</svg>

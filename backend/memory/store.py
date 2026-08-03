@@ -132,6 +132,9 @@ class MemoryStore:
         recent.reverse()
         return copy.deepcopy(recent)
 
+    def get_all_summaries(self) -> list[SummaryRecord]:
+        return copy.deepcopy(sorted(self._summaries, key=lambda s: s.turn_end))
+
     # ---- landmarks ----
 
     def add_landmark(self, record: LandmarkRecord) -> LandmarkRecord:
