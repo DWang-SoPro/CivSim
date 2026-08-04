@@ -5,6 +5,7 @@
 - JSON mode 用 response_format={"type": "json_object"}
 - thinking 模式下忽略 temperature/top_p；只取 content，忽略 reasoning_content
 - 单次独立调用，不做多轮；JSON 解析失败或 API 报错最多重试 3 次
+- thinking 的 reasoning tokens 计入 max_tokens；过小会得到空 content
 """
 
 from __future__ import annotations
@@ -23,6 +24,9 @@ from backend.config import settings
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+
+# 判断类 JSON：thinking 会占 completion 额度，默认给足余量
+_DEFAULT_JSON_MAX_TOKENS = 16384
 
 # 剥离模型偶发包裹的 Markdown 代码块
 _CODE_FENCE_RE = re.compile(
@@ -126,14 +130,18 @@ class LLMClient:
         messages: list[dict[str, str]],
         response_model: type[T],
         *,
-        max_tokens: int | None = 4096,
+        max_tokens: int | None = _DEFAULT_JSON_MAX_TOKENS,
     ) -> T:
         """判断类任务便捷方法：开启 thinking + JSON mode，并用 Pydantic 校验。
 
         JSON 解析失败或校验失败会重试（计入 max_retries）。
+        DeepSeek thinking+JSON 偶发空 content：同一次尝试内自动降级为关闭 thinking。
         """
         last_error: Exception | None = None
         attempts = max(1, self.max_retries)
+        token_budget = (
+            max_tokens if max_tokens is not None else _DEFAULT_JSON_MAX_TOKENS
+        )
 
         for attempt in range(1, attempts + 1):
             try:
@@ -141,14 +149,56 @@ class LLMClient:
                     messages,
                     thinking=True,
                     json_mode=True,
-                    max_tokens=max_tokens,
+                    max_tokens=token_budget,
+                    # 结构化判定不需要高强度长推理，降低空 content 概率
+                    reasoning_effort="low",
                 )
                 data = parse_json_object(raw)
                 return response_model.model_validate(data)
+            except LLMError as exc:
+                last_error = exc
+                if "空 content" not in str(exc):
+                    logger.warning(
+                        "call_json 失败 (%s/%s): %s", attempt, attempts, exc
+                    )
+                    continue
+                # thinking 耗尽预算或 JSON 偶发空答：降级为非 thinking 再试一次
+                logger.warning(
+                    "call_json 空 content，降级关闭 thinking 重试 (%s/%s): %s",
+                    attempt,
+                    attempts,
+                    exc,
+                )
+                try:
+                    raw = await self._raw_once(
+                        messages,
+                        thinking=False,
+                        json_mode=True,
+                        max_tokens=token_budget,
+                        temperature=0.2,
+                    )
+                    data = parse_json_object(raw)
+                    return response_model.model_validate(data)
+                except (
+                    APIError,
+                    RateLimitError,
+                    LLMError,
+                    TimeoutError,
+                    OSError,
+                    json.JSONDecodeError,
+                    ValidationError,
+                    ValueError,
+                ) as fallback_exc:
+                    last_error = fallback_exc
+                    logger.warning(
+                        "call_json 降级重试仍失败 (%s/%s): %s",
+                        attempt,
+                        attempts,
+                        fallback_exc,
+                    )
             except (
                 APIError,
                 RateLimitError,
-                LLMError,
                 TimeoutError,
                 OSError,
                 json.JSONDecodeError,
@@ -208,6 +258,7 @@ class LLMClient:
         json_mode: bool,
         max_tokens: int | None,
         temperature: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> str:
         """单次 API 调用（无内部重试），供 call_json 外层重试使用。"""
         kwargs: dict[str, Any] = {
@@ -223,12 +274,35 @@ class LLMClient:
             kwargs["max_tokens"] = max_tokens
         if not thinking and temperature is not None:
             kwargs["temperature"] = temperature
+        # V4：thinking 开启时可压低推理强度，减少 reasoning 吃光 max_tokens
+        if thinking and reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
 
         response = await self._client.chat.completions.create(**kwargs)
-        message = response.choices[0].message
+        choice = response.choices[0]
+        message = choice.message
         content = message.content
         if content is None or not str(content).strip():
-            raise LLMError("模型返回空 content")
+            finish = getattr(choice, "finish_reason", None)
+            usage = getattr(response, "usage", None)
+            reasoning = getattr(message, "reasoning_content", None)
+            reasoning_len = len(str(reasoning)) if reasoning else 0
+            usage_bits = ""
+            if usage is not None:
+                completion = getattr(usage, "completion_tokens", None)
+                details = getattr(usage, "completion_tokens_details", None)
+                reasoning_tokens = (
+                    getattr(details, "reasoning_tokens", None) if details else None
+                )
+                usage_bits = (
+                    f", completion_tokens={completion}"
+                    f", reasoning_tokens={reasoning_tokens}"
+                )
+            raise LLMError(
+                "模型返回空 content"
+                f"（thinking={thinking}, finish_reason={finish}"
+                f", reasoning_chars={reasoning_len}{usage_bits}）"
+            )
         return str(content)
 
 
