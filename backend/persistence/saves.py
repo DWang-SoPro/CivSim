@@ -325,6 +325,18 @@ def get_save(save_id: str) -> dict[str, Any] | None:
     return dict(row)
 
 
+def delete_save(save_id: str) -> bool:
+    """删除存档。返回是否确实删除了行。"""
+    sid = (save_id or "").strip()
+    if not sid:
+        return False
+    init_db()
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM saves WHERE save_id = ?", (sid,))
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def load_save_into_session_data(save_id: str) -> dict[str, Any]:
     """读取存档并还原为可注入 Session 的数据结构。"""
     row = get_save(save_id)

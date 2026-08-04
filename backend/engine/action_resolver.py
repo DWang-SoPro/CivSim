@@ -7,6 +7,7 @@ friction → 数值汇总 → 叙事输入组装（可选生成叙事）。
 
 from __future__ import annotations
 
+import asyncio
 import random
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -564,8 +565,7 @@ async def resolve_full_turn(
     rng = random.Random(rng_seed)
     split = await split_tasks(text, client=client)
 
-    intents: list[IntentResult] = []
-    sub_meta: list[tuple[str, str, IntentResult]] = []  # id, desc, intent
+    intent_jobs: list[tuple[str, str]] = []  # id, intent_text
     for sub in split.subtasks:
         if not split.is_multi_task:
             intent_text = text
@@ -575,9 +575,20 @@ async def resolve_full_turn(
                 intent_text = (
                     f"{sub.description}\n（原文片段：{sub.original_fragment}）"
                 )
-        intent = await parse_intent(intent_text, state, client=client)
-        intents.append(intent)
-        sub_meta.append((sub.id, intent_text, intent))
+        intent_jobs.append((sub.id, intent_text))
+
+    # 多子任务并行解析，避免串行累加到前端加载超时
+    parsed = await asyncio.gather(
+        *[
+            parse_intent(intent_text, state, client=client)
+            for _, intent_text in intent_jobs
+        ]
+    )
+    intents: list[IntentResult] = list(parsed)
+    sub_meta: list[tuple[str, str, IntentResult]] = [
+        (sid, intent_text, intent)
+        for (sid, intent_text), intent in zip(intent_jobs, intents, strict=True)
+    ]
 
     vague_prompts = [
         i.clarification_prompt or ""

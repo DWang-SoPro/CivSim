@@ -52,7 +52,8 @@ async def generate_historical_lesson(
                 ),
             },
         ]
-        text = await llm.call(messages, thinking=False, temperature=0.7, max_tokens=300)
+        # 2–3 句历史教训；旧值 300 偶发截断文言长句，提高到 600
+        text = await llm.call(messages, thinking=False, temperature=0.7, max_tokens=600)
         text = (text or "").strip()
         if len(text) < 12:
             return fallback

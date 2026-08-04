@@ -64,7 +64,7 @@ def test_new_game_generates_opening_from_complete_state_without_thinking(
         messages, kwargs = fake.calls[0]
         assert kwargs["thinking"] is False
         assert kwargs["temperature"] == pytest.approx(0.7)
-        assert kwargs["max_tokens"] == 512
+        assert kwargs["max_tokens"] == opening.OPENING_MAX_TOKENS
 
         user_prompt = messages[-1]["content"]
         # 每个 CivState 顶层字段都应出现，不是只用文明名的薄提示。

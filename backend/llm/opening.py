@@ -13,6 +13,8 @@ OPENING_MAX_CHARS = 250
 # LLM 字数常有几十字漂移；硬失败阈值略宽，避免 252 这类边界直接开局失败
 OPENING_ACCEPT_MAX_CHARS = 280
 OPENING_MAX_ATTEMPTS = 3
+# 中文约 1 字≈1–2 token；接受上限 280 字 + 标点，512 偏紧，给足余量
+OPENING_MAX_TOKENS = 1024
 
 OPENING_SYSTEM_PROMPT = """\
 你是文明模拟游戏的史官旁白。根据用户提供的完整初始 CivState，为这个文明写一段开场背景。
@@ -87,7 +89,7 @@ async def generate_opening_narrative(
             messages,
             thinking=False,
             temperature=0.7,
-            max_tokens=512,
+            max_tokens=OPENING_MAX_TOKENS,
         )
         narrative = strip_code_fence(str(raw)).strip()
         last_narrative = narrative

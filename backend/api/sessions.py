@@ -108,6 +108,10 @@ class SessionRegistry:
         """按 ID 获取会话，不存在时返回 None。"""
         return self._sessions.get(game_id)
 
+    def values(self):
+        """遍历当前全部会话。"""
+        return self._sessions.values()
+
     def clear(self) -> None:
         """清空会话，仅供测试与开发重置使用。"""
         self._sessions.clear()

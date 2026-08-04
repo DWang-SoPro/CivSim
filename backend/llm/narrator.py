@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from enum import Enum
 from typing import Optional
@@ -13,14 +14,25 @@ from pydantic import BaseModel, Field
 
 from backend.llm.client import LLMClient, get_llm_client
 
+logger = logging.getLogger(__name__)
+
 # 叙事默认采样温度（多样性）
 NARRATOR_TEMPERATURE = 0.8
 
-# 按重要性预估的 max_tokens 上限（中文约 1 字≈1–2 token；略留余量）
+# 按重要性预估的 max_tokens 上限（中文约 1 字≈1–2 token）。
+# 旧值 normal=280 / major=600 会在 major 长叙事上触发 finish_reason=length，
+# 句子半截戛然而止；给足余量覆盖目标字数 + 标点 + 模型偶发超写。
 _MAX_TOKENS_BY_IMPORTANCE = {
-    "normal": 280,
-    "major": 600,
+    "normal": 800,
+    "major": 2000,
 }
+
+# 撞上 max_tokens 时最多再续写一次，避免前端展示未完成句子。
+_CONTINUE_MAX_TOKENS = 800
+_CONTINUE_USER_PROMPT = (
+    "上文因篇幅限制中断，请从断句处自然续写，完成本段史官叙事。"
+    "不要重复已写出的内容，不要加标题或说明，只输出续写正文。"
+)
 
 NARRATOR_SYSTEM_PROMPT = """\
 你是一位文明史书的史官旁白。根据结构化结算结果，写一段白话叙事，供玩家阅读。
@@ -65,7 +77,7 @@ NARRATOR_SYSTEM_PROMPT = """\
 
 【长度——严格遵守】
 - importance=normal：约 80–150 字，必须只有一段，写完即止，不要写到两百字以上。
-- importance=major：约 200–350 字，可分 2–3 段，有起承转合；不要明显超过 350 字。
+- importance=major：约 250–450 字，可分 2–3 段，有起承转合；写完收束，不要明显超过 450 字。
 
 【数值→意象（方向锚点；好懂优先，灵活轮换用词）】
 粮食/人口↑ → 粮仓渐满、收成好转、人口略增、炊烟更密……
@@ -232,19 +244,60 @@ async def narrate_stream(
     client: LLMClient | None = None,
     temperature: float = NARRATOR_TEMPERATURE,
 ) -> AsyncIterator[str]:
-    """流式生成史官叙事文本块。"""
+    """流式生成史官叙事文本块。
+
+    若首次生成因 max_tokens 截断（finish_reason=length），自动追加一次续写，
+    把续写增量继续以流式块 yield 出去。
+    """
     llm = client or get_llm_client()
-    messages = [
+    messages: list[dict[str, str]] = [
         {"role": "system", "content": NARRATOR_SYSTEM_PROMPT},
         {"role": "user", "content": build_narrator_user_prompt(payload)},
     ]
-    max_tokens = _MAX_TOKENS_BY_IMPORTANCE.get(payload.importance.value, 400)
+    max_tokens = _MAX_TOKENS_BY_IMPORTANCE.get(payload.importance.value, 800)
+    finish_reason_out: list[str | None] = []
+    parts: list[str] = []
     async for chunk in llm.call_text_stream(
         messages,
         temperature=temperature,
         max_tokens=max_tokens,
+        finish_reason_out=finish_reason_out,
+    ):
+        parts.append(chunk)
+        yield chunk
+
+    finish_reason = finish_reason_out[0] if finish_reason_out else None
+    if finish_reason != "length":
+        return
+
+    partial = "".join(parts)
+    logger.warning(
+        "叙事被截断，尝试续写 (importance=%s, chars=%s, finish_reason=%s)",
+        payload.importance.value,
+        len(partial),
+        finish_reason,
+    )
+    continue_messages = [
+        *messages,
+        {"role": "assistant", "content": partial},
+        {"role": "user", "content": _CONTINUE_USER_PROMPT},
+    ]
+    continue_finish: list[str | None] = []
+    async for chunk in llm.call_text_stream(
+        continue_messages,
+        temperature=temperature,
+        max_tokens=_CONTINUE_MAX_TOKENS,
+        finish_reason_out=continue_finish,
     ):
         yield chunk
+
+    continue_reason = continue_finish[0] if continue_finish else None
+    if continue_reason == "length":
+        logger.warning(
+            "叙事续写仍被截断 (importance=%s, finish_reason=length)；"
+            "前端可能仍会看到未完成句子",
+            payload.importance.value,
+        )
 
 
 async def narrate(

@@ -12,11 +12,14 @@ import {
   SaveLoadModal,
   type SaveListItem,
 } from "@/components/SaveLoadModal";
+import { StartScreen } from "@/components/StartScreen";
 import {
   StatusPanel,
   type CivStateView,
   type DimensionChanges,
 } from "@/components/StatusPanel";
+import { TemplateSelect } from "@/components/TemplateSelect";
+import type { CivTemplateMeta } from "@/lib/civTemplates";
 
 type CivState = CivStateView & {
   [key: string]: unknown;
@@ -94,12 +97,23 @@ type CompletedStream = {
 
 type WebSocketStatus = "idle" | "connecting" | "open" | "error";
 
+/** 开始界面 → 模板选择 → 游戏主界面 */
+type AppScreen = "start" | "templates" | "playing";
+
 type NarrativeEntry = {
   turn: number;
   year: number;
   text: string;
   streaming?: boolean;
 };
+
+function pickLatestContinueSave(list: SaveListItem[]): SaveListItem | null {
+  if (list.length === 0) {
+    return null;
+  }
+  const autosave = list.find((item) => item.is_autosave);
+  return autosave ?? list[0] ?? null;
+}
 
 const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
@@ -111,7 +125,7 @@ const WS_BASE_URL = API_BASE_URL.replace(/^http:/, "ws:").replace(
 );
 
 /** 提交后等待首帧 / HTTP 结果的最长秒数；超时解除加载态并允许重试。 */
-const ACTION_WAIT_TIMEOUT_MS = 90_000;
+const ACTION_WAIT_TIMEOUT_MS = 120_000;
 
 const websocketStatusLabel: Record<WebSocketStatus, string> = {
   idle: "未连接",
@@ -176,6 +190,7 @@ function updateNarrativeEntry(
 }
 
 export default function Home() {
+  const [screen, setScreen] = useState<AppScreen>("start");
   const [gameId, setGameId] = useState<string | null>(null);
   const [state, setState] = useState<CivState | null>(null);
   const [command, setCommand] = useState("");
@@ -207,6 +222,13 @@ export default function Home() {
   const [saves, setSaves] = useState<SaveListItem[]>([]);
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(
+    "zhou",
+  );
+  /** 从游戏内进入模板选择时，取消可回到主界面 */
+  const [templatesReturnTo, setTemplatesReturnTo] = useState<
+    "start" | "playing"
+  >("start");
 
   const websocketRef = useRef<WebSocket | null>(null);
   const pendingActionRef = useRef<PendingAction | null>(null);
@@ -256,6 +278,28 @@ export default function Home() {
   useEffect(() => {
     narrativeEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [narrativeEntries, awaitingNarrative, clarification]);
+
+  /** 开始界面预取存档，用于「继续上一局」 */
+  useEffect(() => {
+    if (screen !== "start") {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/game/saves`);
+        const result = await readResponse<{ saves: SaveListItem[] }>(response);
+        if (!cancelled) {
+          setSaves(result.saves ?? []);
+        }
+      } catch {
+        // 开始页不必因列档失败打断；读档时再提示
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [screen]);
 
   useEffect(() => {
     if (!gameId) {
@@ -574,9 +618,52 @@ export default function Home() {
     }
 
     void fetchActionMenu(result.game_id);
+    setScreen("playing");
   }
 
-  async function createGame() {
+  function openTemplateSelect(from: "start" | "playing") {
+    setTemplatesReturnTo(from);
+    setSelectedTemplateId("zhou");
+    setError(null);
+    setScreen("templates");
+  }
+
+  function returnToStartMenu() {
+    const previousWebsocket = websocketRef.current;
+    websocketRef.current = null;
+    previousWebsocket?.close();
+
+    pendingActionRef.current = null;
+    completedStreamRef.current = null;
+    websocketInterruptedRef.current = false;
+    actionAbortRef.current?.abort();
+    actionAbortRef.current = null;
+    clearActionWaitTimer();
+    stateTurnRef.current = null;
+    pendingYearRef.current = null;
+    actionTokenRef.current += 1;
+
+    setGameId(null);
+    setState(null);
+    setCommand("");
+    setNarrativeEntries([]);
+    setDimensionChanges({});
+    setClarification([]);
+    setMenuItems([]);
+    setGameOver(false);
+    setGameOverReason(null);
+    setGameOverReport(null);
+    setAwaitingNarrative(false);
+    setSubmitting(false);
+    setCreating(false);
+    setSaveModalOpen(false);
+    setSaveMessage(null);
+    setError(null);
+    setSelectedTemplateId("zhou");
+    setScreen("start");
+  }
+
+  async function createGame(templateId = "zhou") {
     setCreating(true);
     setError(null);
     setDimensionChanges({});
@@ -586,7 +673,7 @@ export default function Home() {
       const response = await fetch(`${API_BASE_URL}/api/game/new`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ template_id: "zhou", seed: null }),
+        body: JSON.stringify({ template_id: templateId, seed: null }),
       });
       const result = await readResponse<NewGameResponse>(response);
       applyLoadedGame(result);
@@ -674,14 +761,42 @@ export default function Home() {
     }
   }
 
+  async function deleteSave(saveId: string) {
+    setSaveBusy(true);
+    setSaveMessage(null);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/game/saves/${encodeURIComponent(saveId)}`,
+        { method: "DELETE" },
+      );
+      await readResponse<{ ok: boolean; save_id: string }>(response);
+      setSaves((prev) => prev.filter((item) => item.save_id !== saveId));
+      setSaveMessage("存档已删除。");
+    } catch (requestError) {
+      const message =
+        requestError instanceof Error ? requestError.message : "删除存档失败";
+      setSaveMessage(message);
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
+  async function continueLatestSave() {
+    const latest = pickLatestContinueSave(saves);
+    if (!latest) {
+      setError("没有可继续的存档。");
+      return;
+    }
+    await loadSave(latest.save_id);
+  }
+
   async function loadLatestAutosave() {
     try {
       const response = await fetch(`${API_BASE_URL}/api/game/saves`);
       const result = await readResponse<{ saves: SaveListItem[] }>(response);
       const list = result.saves ?? [];
       setSaves(list);
-      const latest =
-        list.find((item) => item.is_autosave) ?? list[0] ?? null;
+      const latest = pickLatestContinueSave(list);
       if (!latest) {
         setError("没有可读取的存档。");
         return;
@@ -858,25 +973,108 @@ export default function Home() {
     }
   }
 
-  if (!state || !gameId) {
+  if (screen === "start" || !state || !gameId) {
+    if (screen === "templates") {
+      return (
+        <>
+          <TemplateSelect
+            creating={creating}
+            error={error}
+            selectedId={selectedTemplateId}
+            onSelect={(template: CivTemplateMeta) => {
+              setSelectedTemplateId(template.id);
+              setError(null);
+            }}
+            onConfirm={() => {
+              if (selectedTemplateId) {
+                void createGame(selectedTemplateId);
+              }
+            }}
+            onBack={() => {
+              setError(null);
+              if (templatesReturnTo === "playing" && state && gameId) {
+                setScreen("playing");
+              } else {
+                setScreen("start");
+              }
+            }}
+          />
+          <SaveLoadModal
+            open={saveModalOpen}
+            mode={saveModalMode}
+            saves={saves}
+            loading={saveBusy}
+            message={saveMessage}
+            onClose={() => setSaveModalOpen(false)}
+            onConfirmSave={() => void confirmSave()}
+            onLoad={(saveId) => void loadSave(saveId)}
+            onDelete={(saveId) => deleteSave(saveId)}
+          />
+        </>
+      );
+    }
+
+    const latestSave = pickLatestContinueSave(saves);
     return (
-      <main className="app-shell app-shell--landing">
-        <h1 className="landing-brand">文明灵</h1>
-        <p className="landing-sub">CivSim · 史官卷轴</p>
-        {error && (
-          <p className="banner banner--error" role="alert">
-            {error}
-          </p>
-        )}
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={createGame}
-          disabled={creating}
-        >
-          {creating ? "开局中……" : "新建游戏（西周）"}
-        </button>
-      </main>
+      <>
+        <StartScreen
+          creating={creating}
+          error={error}
+          latestSave={latestSave}
+          onNewGame={() => openTemplateSelect("start")}
+          onLoadSaves={() => void openLoadModal()}
+          onContinue={
+            latestSave ? () => void continueLatestSave() : undefined
+          }
+        />
+        <SaveLoadModal
+          open={saveModalOpen}
+          mode={saveModalMode}
+          saves={saves}
+          loading={saveBusy}
+          message={saveMessage}
+          onClose={() => setSaveModalOpen(false)}
+          onConfirmSave={() => void confirmSave()}
+          onLoad={(saveId) => void loadSave(saveId)}
+          onDelete={(saveId) => deleteSave(saveId)}
+        />
+      </>
+    );
+  }
+
+  if (screen === "templates") {
+    return (
+      <>
+        <TemplateSelect
+          creating={creating}
+          error={error}
+          selectedId={selectedTemplateId}
+          onSelect={(template: CivTemplateMeta) => {
+            setSelectedTemplateId(template.id);
+            setError(null);
+          }}
+          onConfirm={() => {
+            if (selectedTemplateId) {
+              void createGame(selectedTemplateId);
+            }
+          }}
+          onBack={() => {
+            setError(null);
+            setScreen(templatesReturnTo === "playing" ? "playing" : "start");
+          }}
+        />
+        <SaveLoadModal
+          open={saveModalOpen}
+          mode={saveModalMode}
+          saves={saves}
+          loading={saveBusy}
+          message={saveMessage}
+          onClose={() => setSaveModalOpen(false)}
+          onConfirmSave={() => void confirmSave()}
+          onLoad={(saveId) => void loadSave(saveId)}
+          onDelete={(saveId) => deleteSave(saveId)}
+        />
+      </>
     );
   }
 
@@ -920,10 +1118,18 @@ export default function Home() {
           <button
             type="button"
             className="btn-ghost"
-            onClick={createGame}
+            onClick={() => openTemplateSelect("playing")}
             disabled={creating || submitting}
           >
-            {creating ? "开局中……" : "新局"}
+            新局
+          </button>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={returnToStartMenu}
+            disabled={creating || submitting}
+          >
+            主菜单
           </button>
         </div>
       </header>
@@ -1068,13 +1274,14 @@ export default function Home() {
         onClose={() => setSaveModalOpen(false)}
         onConfirmSave={() => void confirmSave()}
         onLoad={(saveId) => void loadSave(saveId)}
+        onDelete={(saveId) => deleteSave(saveId)}
       />
 
       {gameOver && gameOverReport && (
         <GameOverOverlay
           report={gameOverReport}
           onLoadLatest={() => void loadLatestAutosave()}
-          onNewGame={() => void createGame()}
+          onNewGame={() => openTemplateSelect("playing")}
         />
       )}
     </main>

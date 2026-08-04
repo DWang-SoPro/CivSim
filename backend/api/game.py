@@ -16,6 +16,7 @@ from backend.memory.store import MemoryStore
 from backend.models.schemas import CivState
 from backend.persistence.saves import (
     create_or_update_save,
+    delete_save,
     list_saves,
     load_save_into_session_data,
 )
@@ -218,6 +219,19 @@ async def get_saves() -> SaveListResponse:
     """列出全部存档（新→旧）。"""
     rows = list_saves()
     return SaveListResponse(saves=[SaveListItem(**row) for row in rows])
+
+
+@router.delete("/saves/{save_id}")
+async def remove_save(save_id: str) -> dict[str, Any]:
+    """删除指定存档。"""
+    deleted = delete_save(save_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="存档不存在")
+    # 若内存会话仍指向该自动档，清空引用，避免之后覆盖已删 id
+    for session in sessions.values():
+        if session.autosave_id == save_id:
+            session.autosave_id = None
+    return {"ok": True, "save_id": save_id}
 
 
 @router.post("/load/{save_id}", response_model=NewGameResponse)

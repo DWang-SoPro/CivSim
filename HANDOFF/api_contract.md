@@ -20,7 +20,7 @@
 
 **已挂载路由：**
 
-- `backend/api/game.py` — prefix `/api/game`（new / menu / save / saves / load / debug/end）
+- `backend/api/game.py` — prefix `/api/game`（new / menu / save / saves / load / delete save / debug/end）
 - `backend/api/action.py` — prefix `/api/game`（action）
 - `backend/api/websocket.py` — 无 prefix
 - `backend/main.py` — 注册健康检查、游戏、行动与 WebSocket 路由
@@ -298,6 +298,20 @@ split+intent 已在 resolve_full_turn 内完成
 | 状态 | ✅ 已实现 |
 
 **响应：** `{ "saves": [ { "save_id", "slot_name", "civ_name", "template_id", "turn", "year", "saved_at", "is_autosave" } ] }`
+
+---
+
+### 2.7.1 `DELETE /api/game/saves/{save_id}` — 删除存档
+
+| | |
+| --- | --- |
+| 状态 | ✅ 已实现 |
+
+**响应：** `{ "ok": true, "save_id": "<uuid>" }`
+
+若内存会话的 `autosave_id` 指向被删档，会清空该引用。
+
+**错误：** `404` 存档不存在
 
 ---
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 type SaveListItem = {
   save_id: string;
   slot_name: string | null;
@@ -20,6 +22,7 @@ type SaveLoadModalProps = {
   onClose: () => void;
   onConfirmSave?: () => void;
   onLoad?: (saveId: string) => void;
+  onDelete?: (saveId: string) => void | Promise<void>;
 };
 
 function formatYear(year: number): string {
@@ -50,7 +53,10 @@ export function SaveLoadModal({
   onClose,
   onConfirmSave,
   onLoad,
+  onDelete,
 }: SaveLoadModalProps) {
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
   if (!open) {
     return null;
   }
@@ -95,31 +101,80 @@ export function SaveLoadModal({
           </div>
         ) : (
           <div className="modal-body">
-            {loading && <p className="modal-hint">载入列表…</p>}
+            {loading && saves.length === 0 && (
+              <p className="modal-hint">载入列表…</p>
+            )}
             {!loading && saves.length === 0 && (
               <p className="modal-hint">尚无存档。</p>
             )}
             <ul className="save-list">
-              {saves.map((save) => (
-                <li key={save.save_id}>
-                  <button
-                    type="button"
-                    className="save-list-item"
-                    disabled={loading}
-                    onClick={() => onLoad?.(save.save_id)}
-                  >
-                    <span className="save-list-title">
-                      {save.slot_name || save.civ_name}
-                      {save.is_autosave ? " · 自动" : ""}
-                    </span>
-                    <span className="save-list-meta">
-                      {save.civ_name} · {formatYear(save.year)} · 第{save.turn}
-                      回合
-                    </span>
-                    <span className="save-list-time">{formatTime(save.saved_at)}</span>
-                  </button>
-                </li>
-              ))}
+              {saves.map((save) => {
+                const confirming = confirmDeleteId === save.save_id;
+                return (
+                  <li key={save.save_id} className="save-list-row">
+                    <button
+                      type="button"
+                      className="save-list-item"
+                      disabled={loading}
+                      onClick={() => {
+                        setConfirmDeleteId(null);
+                        onLoad?.(save.save_id);
+                      }}
+                    >
+                      <span className="save-list-title">
+                        {save.slot_name || save.civ_name}
+                        {save.is_autosave ? " · 自动" : ""}
+                      </span>
+                      <span className="save-list-meta">
+                        {save.civ_name} · {formatYear(save.year)} · 第{save.turn}
+                        回合
+                      </span>
+                      <span className="save-list-time">
+                        {formatTime(save.saved_at)}
+                      </span>
+                    </button>
+                    {onDelete && (
+                      <div className="save-list-actions">
+                        {confirming ? (
+                          <>
+                            <button
+                              type="button"
+                              className="save-delete-confirm"
+                              disabled={loading}
+                              onClick={() => {
+                                void (async () => {
+                                  await onDelete(save.save_id);
+                                  setConfirmDeleteId(null);
+                                })();
+                              }}
+                            >
+                              确认删除
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-ghost save-delete-cancel"
+                              disabled={loading}
+                              onClick={() => setConfirmDeleteId(null)}
+                            >
+                              取消
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            className="save-delete-btn"
+                            disabled={loading}
+                            aria-label={`删除存档 ${save.slot_name || save.civ_name}`}
+                            onClick={() => setConfirmDeleteId(save.save_id)}
+                          >
+                            删除
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}

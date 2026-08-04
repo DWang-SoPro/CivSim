@@ -5,7 +5,8 @@
 - JSON mode 用 response_format={"type": "json_object"}
 - thinking 模式下忽略 temperature/top_p；只取 content，忽略 reasoning_content
 - 单次独立调用，不做多轮；JSON 解析失败或 API 报错最多重试 3 次
-- thinking 的 reasoning tokens 计入 max_tokens；过小会得到空 content
+- call_json 默认关闭 thinking：结构化输出更稳，也避免推理吃光 max_tokens
+  导致空 content / 前端 90s 等待超时
 """
 
 from __future__ import annotations
@@ -25,8 +26,10 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
-# 判断类 JSON：thinking 会占 completion 额度，默认给足余量
-_DEFAULT_JSON_MAX_TOKENS = 16384
+# IntentResult 等结构化输出通常 < 1k tokens；过大会拖慢偶发空 content 失败路径
+_DEFAULT_JSON_MAX_TOKENS = 4096
+# 单次 HTTP 请求上限，避免 SDK 默认长超时把整回合卡死到前端超时
+_LLM_REQUEST_TIMEOUT_S = 45.0
 
 # 剥离模型偶发包裹的 Markdown 代码块
 _CODE_FENCE_RE = re.compile(
@@ -75,7 +78,13 @@ class LLMClient:
             raise LLMError(
                 "未设置 DEEPSEEK_API_KEY。请在环境变量或 .env 中配置 API Key。"
             )
-        self._client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+        # max_retries=0：由本类外层重试；避免 SDK 隐式重试叠加上我们的 3 次变成超长等待
+        self._client = AsyncOpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=_LLM_REQUEST_TIMEOUT_S,
+            max_retries=0,
+        )
 
     async def call(
         self,
@@ -112,8 +121,17 @@ class LLMClient:
                     kwargs["temperature"] = temperature
 
                 response = await self._client.chat.completions.create(**kwargs)
-                message = response.choices[0].message
+                choice = response.choices[0]
+                message = choice.message
                 content = message.content
+                finish = getattr(choice, "finish_reason", None)
+                if finish == "length":
+                    logger.warning(
+                        "非流式文本被 max_tokens 截断 (finish_reason=length, "
+                        "max_tokens=%s, model=%s)",
+                        max_tokens,
+                        self.model,
+                    )
                 if content is None or not str(content).strip():
                     raise LLMError("模型返回空 content（可能 max_tokens 过小截断了思考）")
                 return str(content)
@@ -132,10 +150,10 @@ class LLMClient:
         *,
         max_tokens: int | None = _DEFAULT_JSON_MAX_TOKENS,
     ) -> T:
-        """判断类任务便捷方法：开启 thinking + JSON mode，并用 Pydantic 校验。
+        """判断类任务：JSON mode + Pydantic 校验（默认关闭 thinking）。
 
-        JSON 解析失败或校验失败会重试（计入 max_retries）。
-        DeepSeek thinking+JSON 偶发空 content：同一次尝试内自动降级为关闭 thinking。
+        DeepSeek thinking+JSON 易空 content，且 reasoning 计入 max_tokens，
+        一次失败就可能拖到前端加载超时。结构化判定用非 thinking 更稳更快。
         """
         last_error: Exception | None = None
         attempts = max(1, self.max_retries)
@@ -147,58 +165,17 @@ class LLMClient:
             try:
                 raw = await self._raw_once(
                     messages,
-                    thinking=True,
+                    thinking=False,
                     json_mode=True,
                     max_tokens=token_budget,
-                    # 结构化判定不需要高强度长推理，降低空 content 概率
-                    reasoning_effort="low",
+                    temperature=0.2,
                 )
                 data = parse_json_object(raw)
                 return response_model.model_validate(data)
-            except LLMError as exc:
-                last_error = exc
-                if "空 content" not in str(exc):
-                    logger.warning(
-                        "call_json 失败 (%s/%s): %s", attempt, attempts, exc
-                    )
-                    continue
-                # thinking 耗尽预算或 JSON 偶发空答：降级为非 thinking 再试一次
-                logger.warning(
-                    "call_json 空 content，降级关闭 thinking 重试 (%s/%s): %s",
-                    attempt,
-                    attempts,
-                    exc,
-                )
-                try:
-                    raw = await self._raw_once(
-                        messages,
-                        thinking=False,
-                        json_mode=True,
-                        max_tokens=token_budget,
-                        temperature=0.2,
-                    )
-                    data = parse_json_object(raw)
-                    return response_model.model_validate(data)
-                except (
-                    APIError,
-                    RateLimitError,
-                    LLMError,
-                    TimeoutError,
-                    OSError,
-                    json.JSONDecodeError,
-                    ValidationError,
-                    ValueError,
-                ) as fallback_exc:
-                    last_error = fallback_exc
-                    logger.warning(
-                        "call_json 降级重试仍失败 (%s/%s): %s",
-                        attempt,
-                        attempts,
-                        fallback_exc,
-                    )
             except (
                 APIError,
                 RateLimitError,
+                LLMError,
                 TimeoutError,
                 OSError,
                 json.JSONDecodeError,
@@ -221,10 +198,13 @@ class LLMClient:
         *,
         temperature: float = 0.8,
         max_tokens: int | None = None,
+        finish_reason_out: list[str | None] | None = None,
     ) -> AsyncIterator[str]:
         """叙事类便捷方法：关闭 thinking + 流式输出，逐块 yield 文本。
 
         不使用 JSON mode；只取 delta.content，忽略 reasoning_content。
+        流结束时最后一个 choice 的 finish_reason 会写入 finish_reason_out
+        （若提供）：通常为 ``stop``（正常结束）或 ``length``（撞上 max_tokens）。
         """
         kwargs: dict[str, Any] = {
             "model": self.model,
@@ -238,17 +218,33 @@ class LLMClient:
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
 
+        finish_reason: str | None = None
         try:
             stream = await self._client.chat.completions.create(**kwargs)
             async for chunk in stream:
                 if not chunk.choices:
                     continue
-                delta = chunk.choices[0].delta
-                piece = getattr(delta, "content", None)
+                choice = chunk.choices[0]
+                reason = getattr(choice, "finish_reason", None)
+                if reason:
+                    finish_reason = str(reason)
+                delta = getattr(choice, "delta", None)
+                piece = getattr(delta, "content", None) if delta is not None else None
                 if piece:
                     yield str(piece)
         except (APIError, RateLimitError, TimeoutError, OSError) as exc:
             raise LLMError(f"流式调用失败: {exc}") from exc
+        finally:
+            if finish_reason_out is not None:
+                finish_reason_out.clear()
+                finish_reason_out.append(finish_reason)
+            if finish_reason == "length":
+                logger.warning(
+                    "流式文本被 max_tokens 截断 (finish_reason=length, "
+                    "max_tokens=%s, model=%s)",
+                    max_tokens,
+                    self.model,
+                )
 
     async def _raw_once(
         self,
