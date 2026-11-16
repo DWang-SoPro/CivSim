@@ -562,7 +562,6 @@ async def resolve_full_turn(
     if not text:
         raise ValueError("玩家输入不能为空")
 
-    rng = random.Random(rng_seed)
     split = await split_tasks(text, client=client)
 
     intent_jobs: list[tuple[str, str]] = []  # id, intent_text
@@ -590,6 +589,29 @@ async def resolve_full_turn(
         for (sid, intent_text), intent in zip(intent_jobs, intents, strict=True)
     ]
 
+    return await resolve_prepared_turn(
+        state, text, split, sub_meta, client=client, rng_seed=rng_seed,
+        generate_narrative=generate_narrative, capacity_params=capacity_params,
+        recent_imagery=recent_imagery, history_context=history_context,
+    )
+
+
+async def resolve_prepared_turn(
+    state: CivState,
+    text: str,
+    split: TaskSplitResult,
+    sub_meta: list[tuple[str, str, IntentResult]],
+    *,
+    rng_seed: int,
+    generate_narrative: bool = False,
+    client: Any = None,
+    capacity_params: type[CapacityParams] = CapacityParams,
+    recent_imagery: Optional[list[str]] = None,
+    history_context: Optional[str] = None,
+) -> FullTurnResult:
+    """Resolve typed decrees from either the LLM parser or the local decree menu."""
+    rng = random.Random(rng_seed)
+    intents = [intent for _, _, intent in sub_meta]
     vague_prompts = [
         i.clarification_prompt or ""
         for i in intents

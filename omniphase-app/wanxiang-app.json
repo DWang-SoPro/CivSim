@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 2,
+  "id": "civsim",
+  "name": "文明灵",
+  "version": "1.0.0",
+  "entry": "index.html",
+  "pageContext": true,
+  "armoryId": "research",
+  "heading": "文明灵",
+  "description": "选择古代文明，发布政令，读国史与民生变化，随时继续本机的对局。",
+  "actionLabel": "进入文明灵",
+  "icon": "icon.svg"
+}

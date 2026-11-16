@@ -1,0 +1,4 @@
+dist/
+node_modules/
+.wanxiang-build-*
+.wanxiang-vue-build.lock
