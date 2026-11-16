@@ -86,6 +86,9 @@ class LLMClient:
             max_retries=0,
         )
 
+    async def close(self) -> None:
+        await self._client.close()
+
     async def call(
         self,
         messages: list[dict[str, str]],
