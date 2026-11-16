@@ -67,6 +67,8 @@ node omniphase-tools/desktop.mjs "$OMNIPHASE_REPO" "$HOME/.civsim-omniphase"
 
 ## 验证
 
+[macOS 实机验收与截图](../docs/verification/omniphase-singleplayer-macos/README.md)记录了完整窗口下令、国史透过玻璃、悬停左栏应用图标关闭，以及关闭或退出后如何续玩。
+
 ```sh
 uv run --frozen --no-sync python -m pytest tests
 node omniphase-tools/check-desktop.mjs "$OMNIPHASE_REPO"

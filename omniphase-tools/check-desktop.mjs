@@ -124,7 +124,11 @@ async function verifyFloatingGameInput() {
 }
 try {
   await launch()
-  await expect.poll(()=>guest('document.querySelector(' + JSON.stringify(sel('civsim-start')) + ')?.disabled')).toBe(false)
+  // A cold Python startup has a 15 s budget in the desktop bridge.
+  // Report an actual startup error instead of timing out on the disabled button.
+  await expect.poll(() => guest(`document.querySelector('.notice.error')?.textContent?.trim() ||
+    (document.querySelector('[data-testid="civsim-start"]')?.disabled === false ? 'ready' : 'loading')`),
+    {timeout:30000}).toBe('ready')
   await shot('01-choose')
   await click('civsim-template-zhou')
   await expect.poll(()=>guest('document.querySelector(' + JSON.stringify(sel('civsim-start')) + ')?.disabled')).toBe(false)
@@ -150,6 +154,18 @@ try {
   await input.press('Enter')
   await expect.poll(()=>read('civsim-answer')).toBeTruthy()
   assert.equal(await read('civsim-turn'),'1')
+  const railApp = page.getByTestId('rail-app-civsim')
+  const dismiss = page.getByTestId('rail-close-civsim')
+  await railApp.hover()
+  await expect(dismiss).toHaveCSS('pointer-events', 'auto')
+  await shot('05-close-from-rail')
+  await dismiss.click()
+  await expect(railApp).toHaveCount(0)
+  const gameOnHome = page.locator('.oa-home-apps').getByRole('button', {name:'文明灵', exact:true})
+  await expect(gameOnHome).toBeVisible()
+  await gameOnHome.click()
+  await expect.poll(()=>read('civsim-turn'), {timeout:20000}).toBe('1')
+  assert.equal(await read('civsim-narrative'), first)
   await close()
   await launch()
   await expect.poll(()=>read('civsim-turn'), {timeout:20000}).toBe('1')
@@ -181,5 +197,5 @@ try {
     })()`)
     await shot('04-国史与悬浮输入框')
   }
-  console.log('PASS · 安装、选西周、澄清不推进、底栏下令、切换、问史不推进、完整重启、读取原回合、续玩第二回合')
+  console.log('PASS · 安装、选西周、澄清不推进、底栏下令、切换、问史不推进、左栏关闭后从首页续玩、完整重启、读取原回合、续玩第二回合')
 } finally { await close(); await fs.rm(state,{recursive:true,force:true}) }
