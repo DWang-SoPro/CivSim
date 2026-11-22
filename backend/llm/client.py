@@ -52,16 +52,23 @@ def strip_code_fence(text: str) -> str:
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
-    """将模型文本解析为 JSON 对象。"""
+    """将模型文本解析为 JSON 对象（兼容代码块或前后夹带简短说明的模型输出）。"""
     cleaned = strip_code_fence(text)
-    data = json.loads(cleaned)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        data = json.loads(cleaned[start : end + 1])
     if not isinstance(data, dict):
         raise ValueError(f"期望 JSON 对象，实际为 {type(data).__name__}")
     return data
 
 
 class LLMClient:
-    """DeepSeek V4 Flash 异步客户端。"""
+    """OpenAI 兼容异步客户端（支持直连 DeepSeek 及万相宿主模型代理）。"""
 
     def __init__(
         self,
@@ -69,11 +76,13 @@ class LLMClient:
         base_url: str | None = None,
         model: str | None = None,
         max_retries: int | None = None,
+        omit_vendor_extra: bool = False,
     ) -> None:
         self.api_key = api_key if api_key is not None else settings.deepseek_api_key
         self.base_url = base_url or settings.llm_base_url
         self.model = model or settings.llm_model
         self.max_retries = max_retries if max_retries is not None else settings.llm_max_retries
+        self.omit_vendor_extra = omit_vendor_extra
         if not self.api_key:
             raise LLMError(
                 "未设置 DEEPSEEK_API_KEY。请在环境变量或 .env 中配置 API Key。"
@@ -111,10 +120,11 @@ class LLMClient:
                 kwargs: dict[str, Any] = {
                     "model": self.model,
                     "messages": messages,
-                    "extra_body": {
-                        "thinking": {"type": "enabled" if thinking else "disabled"},
-                    },
                 }
+                if not self.omit_vendor_extra:
+                    kwargs["extra_body"] = {
+                        "thinking": {"type": "enabled" if thinking else "disabled"},
+                    }
                 if json_mode:
                     kwargs["response_format"] = {"type": "json_object"}
                 if max_tokens is not None:
@@ -214,10 +224,11 @@ class LLMClient:
             "messages": messages,
             "stream": True,
             "temperature": temperature,
-            "extra_body": {
-                "thinking": {"type": "disabled"},
-            },
         }
+        if not self.omit_vendor_extra:
+            kwargs["extra_body"] = {
+                "thinking": {"type": "disabled"},
+            }
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
 
@@ -263,10 +274,11 @@ class LLMClient:
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "extra_body": {
-                "thinking": {"type": "enabled" if thinking else "disabled"},
-            },
         }
+        if not self.omit_vendor_extra:
+            kwargs["extra_body"] = {
+                "thinking": {"type": "enabled" if thinking else "disabled"},
+            }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         if max_tokens is not None:

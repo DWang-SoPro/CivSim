@@ -45,10 +45,41 @@ class ActionDef:
 # ---------------------------------------------------------------------------
 
 
+PREREQ_LABELS: dict[str, tuple[str, str]] = {
+    "food_surplus_ratio": ("粮食供需比", "倍"),
+    "grain_reserve": ("官仓储粮", "倍"),
+    "relief_capacity": ("赈济余力（粮产+仓储）", ""),
+    "literacy_rate": ("识字率", ""),
+    "authority": ("统治力", "点"),
+    "stability": ("稳定", "点"),
+    "bureaucratization": ("官僚化", ""),
+    "tech_agriculture": ("农业技术", "级"),
+    "tech_engineering": ("工程技术", "级"),
+    "tech_knowledge": ("知识技术", "级"),
+    "population": ("人口", "人"),
+    "acc_academic": ("学术底蕴", ""),
+    "acc_military": ("军事底蕴", ""),
+    "acc_commercial": ("商业底蕴", ""),
+    "acc_administrative": ("行政底蕴", ""),
+    "acc_cultural": ("礼乐底蕴", ""),
+    "legitimacy_traditional": ("传统正统", ""),
+    "legitimacy_religious": ("天命/神权正统", ""),
+    "class_tension": ("阶级矛盾", ""),
+    "elite_cohesion": ("精英凝聚力", ""),
+}
+
+
 def _state_value(state: CivState, key: str) -> float:
     """从 CivState 解析前置条件数值；未知键视为 0。"""
     if key == "food_surplus_ratio":
         return float(calculate_food_surplus_from_state(state))
+    if key == "grain_reserve":
+        return float(getattr(state, "grain_reserve", 0.15))
+    if key == "relief_capacity":
+        # 既有当期粮产或官仓储粮其一可支应赈济，避免饥年反而无法开仓放粮
+        food = float(calculate_food_surplus_from_state(state))
+        reserve = float(getattr(state, "grain_reserve", 0.15))
+        return max(food, 0.85 + reserve)
     if key == "literacy_rate":
         return float(state.literacy_rate())
     if key == "authority":
@@ -77,6 +108,25 @@ def _state_value(state: CivState, key: str) -> float:
     if key == "elite_cohesion":
         return float(state.elite_cohesion if state.elite_cohesion is not None else 0.5)
     return 0.0
+
+
+def explain_unmet_prerequisites(
+    action: ActionDef | dict[str, Any], state: CivState
+) -> list[str]:
+    """返回未满足的前置条件可读说明；全部满足时返回空列表。"""
+    prereqs = (
+        (action.get("prerequisites") or {})
+        if isinstance(action, dict)
+        else action.prerequisites
+    )
+    missing: list[str] = []
+    for key, minimum in prereqs.items():
+        current = _state_value(state, key)
+        target = float(minimum)
+        if current + 1e-9 < target:
+            label, unit = PREREQ_LABELS.get(key, (key, ""))
+            missing.append(f"{label}需 ≥ {target:g}{unit}（现 {current:.2f}{unit}）")
+    return missing
 
 
 def check_prerequisites(action: ActionDef | dict[str, Any], state: CivState) -> bool:
@@ -152,7 +202,7 @@ ALL_ACTIONS: list[ActionDef] = [
         name="兴修水利",
         domain="economic",
         description="挖渠筑堰，改善灌溉，稳固农事。",
-        prerequisites={"tech_agriculture": 1.0, "food_surplus_ratio": 1.0},
+        prerequisites={"tech_agriculture": 0.9, "food_surplus_ratio": 0.85},
         cognitive_gap=1,
     ),
     ActionDef(
@@ -160,7 +210,7 @@ ALL_ACTIONS: list[ActionDef] = [
         name="修建粮仓",
         domain="economic",
         description="于要冲建仓积谷，以备凶年。",
-        prerequisites={"tech_engineering": 0.8, "food_surplus_ratio": 1.0},
+        prerequisites={"tech_engineering": 0.8, "food_surplus_ratio": 0.85},
         cognitive_gap=0,
     ),
     ActionDef(
@@ -168,7 +218,7 @@ ALL_ACTIONS: list[ActionDef] = [
         name="开设市集",
         domain="economic",
         description="开放坊市、规范交易，促商旅往来。",
-        prerequisites={"tech_knowledge": 0.8, "authority": 30},
+        prerequisites={"tech_knowledge": 0.8, "authority": 18},
         cognitive_gap=1,
     ),
     ActionDef(
@@ -197,7 +247,7 @@ ALL_ACTIONS: list[ActionDef] = [
         name="任命官吏",
         domain="political",
         description="选任地方守令与朝中职官，理顺政令。",
-        prerequisites={"authority": 30, "bureaucratization": 0.15},
+        prerequisites={"authority": 18, "bureaucratization": 0.15},
         cognitive_gap=0,
     ),
     ActionDef(
@@ -295,7 +345,7 @@ ALL_ACTIONS: list[ActionDef] = [
         name="设立学宫",
         domain="cultural",
         description="于都邑设学，延师授业，培养识字人才。",
-        prerequisites={"tech_knowledge": 0.8, "food_surplus_ratio": 1.0},
+        prerequisites={"tech_knowledge": 0.8, "food_surplus_ratio": 0.88},
         cognitive_gap=1,
     ),
     ActionDef(
@@ -336,7 +386,7 @@ ALL_ACTIONS: list[ActionDef] = [
         name="改进农具",
         domain="technology",
         description="推广铁器/改良农具，提升耕作效率。",
-        prerequisites={"tech_agriculture": 1.0, "food_surplus_ratio": 1.0},
+        prerequisites={"tech_agriculture": 1.0, "food_surplus_ratio": 0.85},
         cognitive_gap=1,
     ),
     ActionDef(
@@ -377,10 +427,35 @@ ALL_ACTIONS: list[ActionDef] = [
         name="赈济饥民",
         domain="composite",
         description="开仓放粮、安抚流民，缓和社会张力。",
-        prerequisites={"food_surplus_ratio": 1.0, "authority": 25},
+        prerequisites={"relief_capacity": 0.92, "authority": 18},
         cognitive_gap=0,
     ),
 ]
+
+
+def generate_full_action_catalog(state: CivState) -> list[dict[str, Any]]:
+    """返回全部 28 项行动，含当前是否可用、难度及未满足前提说明。"""
+    domain_order = {d: i for i, d in enumerate(DOMAIN_LABELS)}
+    items: list[dict[str, Any]] = []
+    for action in ALL_ACTIONS:
+        unmet = explain_unmet_prerequisites(action, state)
+        ok = len(unmet) == 0
+        items.append(
+            {
+                "id": action.id,
+                "name": action.name,
+                "title": action.name,
+                "text": action.input_text(),
+                "domain": action.domain,
+                "domainLabel": DOMAIN_LABELS.get(action.domain, action.domain),
+                "description": action.description,
+                "difficulty": estimate_difficulty(action, state) if ok else "受限",
+                "available": ok,
+                "unmetReason": "；".join(unmet) if unmet else None,
+            }
+        )
+    items.sort(key=lambda item: (domain_order.get(item["domain"], 99), not item["available"], item["name"]))
+    return items
 
 
 def generate_action_menu(state: CivState) -> list[dict[str, Any]]:

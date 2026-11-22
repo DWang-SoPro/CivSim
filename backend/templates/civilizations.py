@@ -93,6 +93,7 @@ def _build_templates() -> dict[str, CivState]:
         biome_fertility=0.75,
         # 两河灌溉发达：补偿小领土，使开局盈余 ≈0.90（modifier=1 时约 0.74）
         agricultural_modifier=0.90 / 0.7427800269905533,
+        grain_reserve=0.14,
         land_system=LandSystem.NOBLE_ESTATE,
         labor_distribution=_labor(
             free_citizens=0.4, corvee=0.3, serf=0.1, slave=0.2
@@ -142,6 +143,7 @@ def _build_templates() -> dict[str, CivState]:
         territory_core=600,
         territory_frontier=200,
         biome_fertility=0.85,
+        grain_reserve=0.24,
         land_system=LandSystem.STATE_GRANT,
         labor_distribution=_labor(
             free_citizens=0.3, corvee=0.5, serf=0.1, slave=0.1
@@ -191,6 +193,7 @@ def _build_templates() -> dict[str, CivState]:
         territory_core=800,
         territory_frontier=400,
         biome_fertility=0.65,
+        grain_reserve=0.18,
         land_system=LandSystem.CLAN_COMMUNAL,
         labor_distribution=_labor(
             free_citizens=0.7, corvee=0.2, serf=0.05, slave=0.05
@@ -240,6 +243,7 @@ def _build_templates() -> dict[str, CivState]:
         territory_core=800,
         territory_frontier=700,
         biome_fertility=0.70,
+        grain_reserve=0.18,
         land_system=LandSystem.NOBLE_ESTATE,
         labor_distribution=_labor(
             free_citizens=0.3, corvee=0.3, serf=0.2, slave=0.2
@@ -289,6 +293,7 @@ def _build_templates() -> dict[str, CivState]:
         territory_core=1000,
         territory_frontier=1000,
         biome_fertility=0.65,
+        grain_reserve=0.20,
         land_system=LandSystem.STATE_GRANT,
         labor_distribution=_labor(
             free_citizens=0.3, corvee=0.4, serf=0.2, slave=0.1
@@ -340,6 +345,7 @@ def _build_templates() -> dict[str, CivState]:
         biome_fertility=0.55,
         # 多山贫瘠但有一定耕作技艺：开局盈余 ≈0.90（modifier=1 时约 0.62）
         agricultural_modifier=0.90 / 0.6184587394411957,
+        grain_reserve=0.12,
         land_system=LandSystem.YEOMAN_SMALLHOLD,
         labor_distribution=_labor(
             free_citizens=0.5, corvee=0.1, serf=0.0, slave=0.4

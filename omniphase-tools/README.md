@@ -59,11 +59,11 @@ node omniphase-tools/desktop.mjs "$OMNIPHASE_REPO" "$HOME/.civsim-omniphase"
 
 每次打开会按当前作用域读取最近打开的存档，点击「文明与存档」可切换对局。完整退出万相会结束本机服务。更换资料目录或运行项目会得到单独的对局列表。
 
-## 模型可选
+## 模型自动桥接与可选配置
 
-默认不配置 `CIVSIM_MODEL_MODE`。本地模式支持收录的政令、常用同义表达和组合行动，史官根据真实结算生成纪要。「问史官」是查阅游戏已有国史的本地功能。
+在万相桌面内运行时，若用户已登录万相账号或已在万相设置中配置可用模型，宿主会通过仅本机可达的作用域能力令牌为文明灵开启「万相史官」模式（支持任意自然语言政令、三层历史记忆与史官问对），模型凭据始终留在万相服务端，不会暴露给游戏页面或 Python 子进程。玩家可在游戏顶栏随时切换「万相史官」与「本地规则」；未登录或离线时自动使用涵盖 6 大领域 28 项国策、制度演变与随机历史事件的本地规则引擎。
 
-若需要模型解释更自由的政令和执笔回合叙事，在启动器所在进程中显式设置 `CIVSIM_MODEL_MODE=enabled`、`CIVSIM_MODEL_URL` 和 `CIVSIM_MODEL_NAME`。远程 OpenAI 兼容端点仅使用 HTTPS，并通过 `CIVSIM_MODEL_API_KEY` 注入该服务的密钥。本机回环模型端点允许 HTTP。启用后，政令、必要国势与近期历史可能发往所选模型服务，数值与掷骰仍在本机结算。网页前端无需取得密钥。关闭模型模式后重新启动即可恢复规则模式。
+若在独立命令行调试时需要显式指定外部模型服务，可在启动器所在进程设置 `CIVSIM_MODEL_MODE=enabled`、`CIVSIM_MODEL_URL` 和 `CIVSIM_MODEL_NAME`（设为 `CIVSIM_MODEL_MODE=offline` 则强制仅使用离线规则）。远程 OpenAI 兼容端点仅使用 HTTPS，并通过 `CIVSIM_MODEL_API_KEY` 注入该服务的密钥；本机回环端点允许 HTTP。数值与掷骰始终在本机结算。
 
 ## 验证
 
@@ -82,7 +82,7 @@ node omniphase-tools/check-desktop.mjs "$OMNIPHASE_REPO"
 
 ```sh
 .venv/bin/python omniphase-tools/build-phases-package.py ./dist
-.venv/bin/python omniphase-tools/check-phases-package.py ./dist/civsim-1.0.0-darwin-arm64.zip
+.venv/bin/python omniphase-tools/check-phases-package.py ./dist/civsim-1.1.0-darwin-arm64.zip
 ```
 
 第一步生成 ZIP 和 JSON 格式的构建回执（标准输出），包含归档 SHA-256、安装文件树 SHA-256、压缩和解压大小。相同的源码、Vue 构建、Python 解释器和锁定依赖产生相同的归档。商店目录以审核过的归档摘要识别下载，发布方应保留相应制品。第二步验收本机引擎：移动到带空格与中文的新路径，从空白资料开始下令，停止进程，重启后比较整份回合快照并继续下一回合。

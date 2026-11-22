@@ -291,6 +291,12 @@ class CivState(BaseModel):
             "范围约 0.5—2.0，默认 1.0；用于模板级盈余校准，不改动领土"
         ),
     )
+    grain_reserve: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=2.0,
+        description="官仓余粮储备（折合全国年口粮倍数，0.0—2.0，默认 0.15 以兼容旧存档）",
+    )
 
     # ---- 第二层：生产关系 ----
     land_system: LandSystem = Field(..., description="主导土地制度")
