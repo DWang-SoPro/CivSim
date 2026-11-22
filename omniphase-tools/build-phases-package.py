@@ -83,7 +83,7 @@ def game_files():
     for rel in ("__init__.py", "config.py", "llm/__init__.py", "llm/client.py", "llm/intent_parser.py",
                 "llm/narrator.py", "llm/task_splitter.py"):
         yield "engine/backend/" + rel, backend / rel
-    for directory in ("singleplayer", "engine", "models", "templates"):
+    for directory in ("singleplayer", "engine", "models", "templates", "memory"):
         for file in (backend / directory).glob("*.py"):
             yield "engine/backend/" + file.relative_to(backend).as_posix(), file
 
