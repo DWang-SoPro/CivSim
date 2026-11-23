@@ -2,12 +2,18 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { CIV_TEMPLATES, getCivTemplate } from './civilizations'
 import Atlas from './Atlas.vue'
+import ArtifactArt from './ArtifactArt.vue'
+import RealmDiorama from './RealmDiorama.vue'
+import TechTree from './TechTree.vue'
 import {
+  changeDelta,
   changeText,
   consultHistory,
   historicalYear,
+  isGoodChange,
   request,
   requestId,
+  signedNumberText,
   valueText,
 } from './game'
 import type {
@@ -32,10 +38,17 @@ const DOMAINS = [
 ]
 
 const CONSULT_PRESETS = [
-  '当前国势有何隐忧与施政建议？',
-  '最近粮食与仓储怎样变化？',
-  '现行田制、政体与赋税如何？',
+  { short: '隐忧与建议', text: '当前国势有何隐忧与施政建议？' },
+  { short: '粮仓与供需', text: '最近粮食与仓储怎样变化？' },
+  { short: '田制与政体', text: '现行田制、政体与赋税如何？' },
 ]
+
+const LABOR_COLORS: Record<string, string> = {
+  自由民: '#3c6e57',
+  徭役: '#b08344',
+  农奴: '#7e6651',
+  奴隶: '#984836',
+}
 
 const game = ref<Game | null>(null)
 const saves = ref<GameSummary[]>([])
@@ -43,11 +56,13 @@ const catalog = ref<Catalog>({ templates: [], decrees: [] })
 const selected = ref('zhou')
 const selectedCiv = computed(() => getCivTemplate(selected.value) ?? CIV_TEMPLATES[0])
 const library = ref(true)
-const archive = ref(false)
+const activeTab = ref<'court' | 'tree' | 'archive'>('court')
+const focusedNodeId = ref<string | null>(null)
 const openComposer = ref(false)
 const moreDecrees = ref(false)
 const domainFilter = ref('all')
 const showDeepPanel = ref(true)
+const showAllChanges = ref(false)
 const confirmingDelete = ref<string | null>(null)
 const lockedHint = ref('')
 const draft = ref('')
@@ -60,12 +75,16 @@ const error = ref('')
 const clarification = ref('')
 const reply = ref('')
 const inputEl = ref<HTMLTextAreaElement | null>(null)
-const historyCount = ref(8)
+const settledPulse = ref(false)
+let pulseTimer: ReturnType<typeof setTimeout> | undefined
 
 const latest = computed(() => game.value?.history.at(-1))
-const entries = computed(() =>
-  (game.value?.history ?? []).slice(-historyCount.value).reverse()
-)
+const visibleChanges = computed(() => {
+  const list = latest.value?.changes ?? []
+  if (showAllChanges.value || list.length <= 8) return list
+  return list.slice(0, 8)
+})
+const entries = computed(() => [...(game.value?.history ?? [])].reverse())
 
 const activeDecrees = computed<Decree[]>(() => {
   return game.value?.availableDecrees?.length
@@ -73,10 +92,34 @@ const activeDecrees = computed<Decree[]>(() => {
     : catalog.value.decrees
 })
 
+const availableDecreeCount = computed(
+  () => activeDecrees.value.filter(d => d.available !== false).length
+)
+
 const filteredDecrees = computed<Decree[]>(() => {
   if (domainFilter.value === 'all') return activeDecrees.value
   return activeDecrees.value.filter(d => d.domain === domainFilter.value)
 })
+
+const activeScale = computed<'small' | 'medium' | 'large'>(() => {
+  const trimmed = draft.value.trim()
+  if (/^(?:小规模|试行)/.test(trimmed)) return 'small'
+  if (/^(?:大规模|举国)/.test(trimmed)) return 'large'
+  return 'medium'
+})
+
+const draftedParts = computed(() =>
+  draft.value
+    .trim()
+    .replace(/^(?:小规模|大规模|举国|试行)\s*/, '')
+    .split(/\s*[、，,；;]\s*/)
+    .filter(Boolean)
+)
+
+function isDecreeDrafted(d: Decree): boolean {
+  if (!openComposer.value || authoring.value !== 'decree') return false
+  return draftedParts.value.includes(d.text) || draftedParts.value.includes(d.title)
+}
 
 const starterActions = computed<Decree[]>(() => {
   const pool = activeDecrees.value.filter(d => d.available !== false)
@@ -96,6 +139,10 @@ const starterActions = computed<Decree[]>(() => {
     ...new Map([...chosen, ...pool].map(d => [d.id, d])).values(),
   ].slice(0, 4)
 })
+
+const activeLabor = computed(() =>
+  (game.value?.panel?.structure.labor ?? []).filter(item => item.pct > 0)
+)
 
 const modeBadge = computed(() => {
   if (catalog.value.mode === 'model') {
@@ -119,9 +166,19 @@ function explainError(e: unknown) {
   return e instanceof Error ? e.message : String(e)
 }
 
-function isPositiveChange(item: Change): boolean {
-  const delta = item.after - item.before
-  return delta > 0
+function triggerSettlePulse() {
+  settledPulse.value = false
+  clearTimeout(pulseTimer)
+  requestAnimationFrame(() => {
+    settledPulse.value = true
+    pulseTimer = setTimeout(() => {
+      settledPulse.value = false
+    }, 1500)
+  })
+}
+
+function deltaArrow(change: Change): string {
+  return changeDelta(change) > 0 ? '▲' : '▼'
 }
 
 function updateSaves(data: Game) {
@@ -134,6 +191,7 @@ function updateSaves(data: Game) {
 
 function resetInput() {
   moreDecrees.value = false
+  showAllChanges.value = false
   lockedHint.value = ''
   draft.value = ''
   openComposer.value = false
@@ -148,9 +206,9 @@ function showGame(data: Game) {
   game.value = data
   selected.value = data.templateId
   library.value = false
-  archive.value = false
+  activeTab.value = 'court'
+  focusedNodeId.value = data.progression?.focusNodeId ?? null
   confirmingDelete.value = null
-  historyCount.value = 8
   updateSaves(data)
   resetInput()
   if (previous && previous.turn === data.turn) {
@@ -158,6 +216,20 @@ function showGame(data: Game) {
     openComposer.value = true
     error.value = '上道政令尚无回执，可重读国史或按相同请求重试。'
   }
+}
+
+function openTechTree(nodeId?: string) {
+  if (nodeId) focusedNodeId.value = nodeId
+  else if (game.value?.progression?.focusNodeId) {
+    focusedNodeId.value = game.value.progression.focusNodeId
+  }
+  activeTab.value = 'tree'
+}
+
+function stageFromTree(decrees: string[]) {
+  activeTab.value = 'court'
+  const picked = decrees.slice(0, 3)
+  void compose('decree', picked.length ? picked.join('、') : undefined)
 }
 
 async function getGame(id: string) {
@@ -256,7 +328,7 @@ async function removeSave(id: string) {
 async function openLibrary() {
   if (busy.value) return
   library.value = true
-  archive.value = false
+  activeTab.value = 'court'
   confirmingDelete.value = null
   error.value = ''
   if (!connected.value) return
@@ -275,16 +347,31 @@ async function openLibrary() {
 function pickDecree(d: Decree) {
   if (busy.value) return
   if (d.available === false) {
-    lockedHint.value = `「${d.title}」当前尚未具备条件：${d.unmetReason || '请先夯实国势基础'}。`
+    lockedHint.value = `「${d.title}」尚未具备条件：${d.unmetReason || '请先夯实国势基础'}。`
     return
   }
   lockedHint.value = ''
   if (openComposer.value && authoring.value === 'decree' && draft.value.trim()) {
-    const existing = draft.value.trim()
-    if (!existing.includes(d.text)) {
-      draft.value = `${existing}、${d.text}`
+    const scalePrefix =
+      activeScale.value === 'small'
+        ? '小规模'
+        : activeScale.value === 'large'
+          ? '大规模'
+          : ''
+    const parts = [...draftedParts.value]
+    const idx = parts.findIndex(p => p === d.text || p === d.title)
+    if (idx >= 0) {
+      parts.splice(idx, 1)
+      draft.value = parts.length ? `${scalePrefix}${parts.join('、')}` : ''
       return
     }
+    if (parts.length >= 3) {
+      lockedHint.value = '单回合最多并举 3 项政令，以免民力过度分薄。可先点已选国策取消一项。'
+      return
+    }
+    parts.push(d.text)
+    draft.value = `${scalePrefix}${parts.join('、')}`
+    return
   }
   void compose('decree', d.text)
 }
@@ -302,10 +389,18 @@ function applyScalePrefix(scale: 'small' | 'medium' | 'large') {
         : cleaned
 }
 
+function toggleMoreDecrees() {
+  moreDecrees.value = !moreDecrees.value
+  if (moreDecrees.value) {
+    reply.value = ''
+  }
+}
+
 async function compose(mode: 'decree' | 'consult', text?: string) {
   if (busy.value) return
   authoring.value = mode
   openComposer.value = true
+  if (mode === 'consult') moreDecrees.value = false
   error.value = ''
   clarification.value = ''
   lockedHint.value = ''
@@ -358,7 +453,7 @@ async function submit(text: string, mode = authoring.value): Promise<boolean> {
     }
     draft.value = ''
     openComposer.value = false
-    archive.value = false
+    activeTab.value = 'court'
     return true
   }
   if (active.status === 'game_over') {
@@ -389,6 +484,7 @@ async function submit(text: string, mode = authoring.value): Promise<boolean> {
   busy.value = true
   reply.value = ''
   try {
+    const prevTurn = active.turn
     const data = await request<Game>('turn', {
       gameId: operation.gameId,
       expectedTurn: operation.turn,
@@ -399,7 +495,8 @@ async function submit(text: string, mode = authoring.value): Promise<boolean> {
     game.value = data
     updateSaves(data)
     pendingTurns.delete(active.gameId)
-    archive.value = false
+    activeTab.value = 'court'
+    if (data.turn > prevTurn) triggerSettlePulse()
     if (data.clarification) {
       clarification.value = data.clarification
       draft.value = value
@@ -424,10 +521,11 @@ async function reconcile() {
     const data = await request<Game>('get', { gameId: prior.gameId })
     game.value = data
     updateSaves(data)
-    archive.value = false
+    activeTab.value = 'court'
     if (data.turn !== prior.turn) {
       pendingTurns.delete(prior.gameId)
       resetInput()
+      triggerSettlePulse()
       error.value = '已重读最新国史，请核对纪年后继续。'
     } else {
       draft.value = prior.text
@@ -473,15 +571,16 @@ onMounted(() => {
 })
 onUnmounted(() => {
   mounted = false
+  clearTimeout(pulseTimer)
   unsubscribe?.()
 })
 </script>
 
 <template>
-  <main class="ledger">
+  <main class="ledger" :class="{ settling: settledPulse }">
     <header class="mast">
       <div class="identity">
-        <img :src="emblem" alt="" width="35" height="35" />
+        <img :src="emblem" alt="" width="30" height="30" />
         <strong>文明灵</strong>
         <span>CivSim</span>
       </div>
@@ -503,15 +602,32 @@ onUnmounted(() => {
           {{ modeBadge }}
         </span>
         <div v-if="game && !library" class="nav">
-          <button :aria-pressed="!archive" @click="archive = false">朝堂</button>
+          <button type="button" :aria-pressed="activeTab === 'court'" @click="activeTab = 'court'">朝堂</button>
           <button
-            data-testid="civsim-history"
-            :aria-pressed="archive"
-            @click="archive = true"
+            v-if="game.progression"
+            type="button"
+            data-testid="civsim-tree-tab"
+            :aria-pressed="activeTab === 'tree'"
+            @click="openTechTree()"
           >
-            国史
+            天工图谱
+            <span
+              class="nav-badge"
+              :class="{ 'is-new': game.progression.recentUnlocks.length > 0 }"
+            >
+              {{ game.progression.unlockedCount }}/{{ game.progression.totalNodes }}
+            </span>
           </button>
           <button
+            type="button"
+            data-testid="civsim-history"
+            :aria-pressed="activeTab === 'archive'"
+            @click="activeTab = 'archive'"
+          >
+            国史 ({{ game.history.length }})
+          </button>
+          <button
+            type="button"
             data-testid="civsim-library"
             :disabled="busy"
             @click="openLibrary"
@@ -522,6 +638,7 @@ onUnmounted(() => {
       </div>
     </header>
 
+    <!-- 一、开局与存档视图（一屏自适应，存档区独立局部滚动） -->
     <section v-if="library || !game" class="library">
       <div class="atlas-hero">
         <Atlas :selected="selected" @select="selected = $event" />
@@ -538,6 +655,7 @@ onUnmounted(() => {
             <button
               v-for="civ in CIV_TEMPLATES"
               :key="civ.id"
+              type="button"
               :data-testid="'civsim-template-' + civ.id"
               :aria-pressed="civ.id === selected"
               :disabled="busy"
@@ -548,6 +666,7 @@ onUnmounted(() => {
           </div>
           <p class="blurb">{{ selectedCiv.blurb }}</p>
           <button
+            type="button"
             class="primary"
             data-testid="civsim-start"
             :disabled="!connected || busy || loading"
@@ -560,6 +679,10 @@ onUnmounted(() => {
             当前为预览。请在已连接本机游戏服务的万相内打开。
           </p>
           <p v-if="loading" class="notice" role="status">正在读取本机存档…</p>
+          <div v-if="error" class="notice error" role="alert">
+            {{ error }}
+            <button v-if="!connected" type="button" @click="boot">重新连接</button>
+          </div>
         </section>
 
         <section class="saves">
@@ -568,149 +691,388 @@ onUnmounted(() => {
             <small v-if="saves.length">{{ saves.length }} 份记录</small>
           </div>
           <p v-if="!saves.length" class="muted">开局后将自动保存进度。</p>
-          <div v-for="(save, index) in saves" :key="save.gameId" class="save-row">
-            <button
-              :data-testid="index === 0 ? 'civsim-resume' : undefined"
-              class="save"
-              :disabled="busy"
-              @click="getGame(save.gameId)"
-            >
-              <span>
-                <b>{{ save.name }}</b>
-                <small>{{ historicalYear(save.year) }} · 第 {{ save.turn }} 回合</small>
-              </span>
-              <i aria-hidden="true">→</i>
-            </button>
-            <div class="save-actions">
-              <template v-if="confirmingDelete === save.gameId">
+          <div v-else class="saves-scroll">
+            <div v-for="(save, index) in saves" :key="save.gameId" class="save-row">
+              <button
+                type="button"
+                :data-testid="index === 0 ? 'civsim-resume' : undefined"
+                class="save"
+                :disabled="busy"
+                @click="getGame(save.gameId)"
+              >
+                <span>
+                  <b>{{ save.name }}</b>
+                  <small>{{ historicalYear(save.year) }} · 第 {{ save.turn }} 回合</small>
+                </span>
+                <i aria-hidden="true">→</i>
+              </button>
+              <div class="save-actions">
+                <template v-if="confirmingDelete === save.gameId">
+                  <button
+                    type="button"
+                    class="danger-link"
+                    :data-testid="'civsim-confirm-delete-' + index"
+                    :disabled="busy"
+                    @click="removeSave(save.gameId)"
+                  >
+                    确认删除
+                  </button>
+                  <button
+                    type="button"
+                    class="muted-link"
+                    :disabled="busy"
+                    @click="confirmingDelete = null"
+                  >
+                    取消
+                  </button>
+                </template>
                 <button
-                  type="button"
-                  class="danger-link"
-                  :data-testid="'civsim-confirm-delete-' + index"
-                  :disabled="busy"
-                  @click="removeSave(save.gameId)"
-                >
-                  确认删除
-                </button>
-                <button
+                  v-else
                   type="button"
                   class="muted-link"
+                  :data-testid="'civsim-delete-' + index"
                   :disabled="busy"
-                  @click="confirmingDelete = null"
+                  title="删除此局存档"
+                  @click="confirmingDelete = save.gameId"
                 >
-                  取消
+                  删除
                 </button>
-              </template>
-              <button
-                v-else
-                type="button"
-                class="muted-link"
-                :data-testid="'civsim-delete-' + index"
-                :disabled="busy"
-                title="删除此局存档"
-                @click="confirmingDelete = save.gameId"
-              >
-                删除
-              </button>
+              </div>
             </div>
           </div>
         </section>
       </div>
-      <div v-if="error" class="notice error" role="alert">
-        {{ error }}
-        <button v-if="!connected" @click="boot">重新连接</button>
-      </div>
     </section>
 
+    <!-- 二、朝堂与国史视图（整屏固定，绝不触发外层纵向滚动） -->
     <section v-else class="court">
       <header class="court-title">
-        <div>
-          <p>
-            {{ getCivTemplate(game.templateId)?.region }} ·
-            {{ historicalYear(game.year) }}
+        <div class="court-heading">
+          <h1 data-testid="civsim-game-title">{{ game.name }}</h1>
+          <p class="court-sub">
+            <span>{{ getCivTemplate(game.templateId)?.region }}</span>
+            <i>·</i>
+            <span>{{ historicalYear(game.year) }}</span>
             <template v-if="game.panel">
-              · {{ game.panel.structure.landSystem }} ·
-              {{ game.panel.structure.polity }}
+              <i>·</i>
+              <span :class="{ shifted: game.panel.structure.landSystemBefore }">
+                {{ game.panel.structure.landSystem }}
+                <em v-if="game.panel.structure.landSystemBefore" class="shift-tag">
+                  原：{{ game.panel.structure.landSystemBefore }}
+                </em>
+              </span>
+              <i>·</i>
+              <span :class="{ shifted: game.panel.structure.polityBefore }">
+                {{ game.panel.structure.polity }}
+              </span>
             </template>
           </p>
-          <h1 data-testid="civsim-game-title">{{ game.name }}</h1>
         </div>
         <div class="turn-seal">
-          {{ game.turn === 0 ? '开国' : '纪年' }}
+          <span>{{ game.turn === 0 ? '开国' : '纪年' }}</span>
           <strong data-testid="civsim-turn">{{ game.turn }}</strong>
         </div>
       </header>
 
-      <div v-if="!archive" class="court-grid">
-        <div>
-          <article class="chronicle">
+      <p v-if="error" class="notice error compact-notice" role="alert">
+        <span>{{ error }}</span>
+        <button v-if="pendingTurn" type="button" :disabled="busy" @click="reconcile">
+          重读本局
+        </button>
+      </p>
+
+      <!-- 2A. 朝堂双栏驾驶舱 -->
+      <div v-if="activeTab === 'court'" class="court-grid">
+        <div class="court-left">
+          <article class="chronicle" :class="{ condensed: moreDecrees }">
             <div class="section-head">
-              <h2>史官记事</h2>
-              <small>{{
-                latest?.turn === 0 ? '开篇' : '第 ' + latest?.turn + ' 回合'
-              }}</small>
+              <div class="chronicle-title-group">
+                <h2>史官记事</h2>
+                <div v-if="latest?.outcomes?.length" class="outcome-seals">
+                  <span
+                    v-for="(out, idx) in latest.outcomes"
+                    :key="idx"
+                    class="outcome-seal"
+                    :class="'tier-' + out.tier"
+                  >
+                    <small v-if="out.scale !== 'medium'">{{ out.scaleLabel }}·</small>{{ out.name }}
+                    <b>{{ out.tierLabel }}</b>
+                  </span>
+                </div>
+                <span v-else-if="latest?.decree && latest.turn > 0" class="decree-chip">
+                  政令 · {{ latest.decree }}
+                </span>
+              </div>
+              <small class="turn-caption">
+                {{ latest?.turn === 0 ? '开篇' : '第 ' + latest?.turn + ' 回合' }}
+                <template v-if="latest?.years"> · 历 {{ latest.years }} 载</template>
+              </small>
             </div>
-            <p v-if="latest?.decree && latest.turn > 0" class="decree-line">
-              政令 · {{ latest.decree }}
-            </p>
+
             <p data-testid="civsim-narrative" class="narrative">
               {{ latest?.narrative || '尚无记载。' }}
             </p>
-            <div v-if="latest?.changes.length" class="changes">
-              <span
-                v-for="item in latest.changes"
-                :key="item.id"
-                :class="isPositiveChange(item) ? 'pos' : 'neg'"
-              >
-                {{ item.label }} <b>{{ changeText(item) }}</b>
-              </span>
-            </div>
-          </article>
 
-          <div class="orders">
-            <div class="section-head">
-              <h2>{{ game.status === 'game_over' ? '终局' : '发布政令' }}</h2>
+            <!-- 本回合新突破：点击直达天工·典章图谱对应节点 -->
+            <div
+              v-if="game.progression?.recentUnlocks.length && !moreDecrees"
+              class="unlock-strip"
+              data-testid="civsim-unlock-strip"
+            >
               <button
+                v-for="unlock in game.progression.recentUnlocks"
+                :key="unlock.id"
                 type="button"
-                class="text-button"
-                data-testid="civsim-consult"
-                @click="compose('consult')"
+                class="unlock-chip"
+                @click="openTechTree(unlock.targetNodeId)"
               >
-                问史官
+                <ArtifactArt :art="unlock.art" :kind="unlock.kind" :size="28" />
+                <span class="unlock-text">
+                  <em>{{ unlock.kindLabel }} · {{ unlock.branchName }}</em>
+                  <strong>{{ unlock.name }}</strong>
+                </span>
+                <i aria-hidden="true">展阅 →</i>
               </button>
             </div>
 
-            <template v-if="game.status !== 'game_over'">
-              <div class="suggestions">
-                <button
-                  v-for="d in starterActions"
-                  :key="d.id"
-                  :disabled="busy"
-                  :title="d.description"
-                  @click="pickDecree(d)"
+            <!-- 本轮结算数值变动看板（默认完整展示前 8 项核心变动，不截半行；展开国策谱时折叠为单行摘要以腾出空间） -->
+            <div
+              v-if="latest?.changes.length"
+              class="delta-board"
+              data-testid="civsim-delta-board"
+            >
+              <div class="delta-board-head">
+                <span>
+                  本轮国势变动（{{ latest.changes.length }} 项）
+                  <em v-if="moreDecrees" class="folded-hint">· 已收合明细以便选策</em>
+                </span>
+                <div class="delta-head-actions">
+                  <button
+                    v-if="!moreDecrees && latest.changes.length > 8"
+                    type="button"
+                    class="delta-expand-btn"
+                    @click="showAllChanges = !showAllChanges"
+                  >
+                    {{ showAllChanges ? '仅看要项 (8)' : `展开全部 (${latest.changes.length})` }}
+                  </button>
+                  <small v-else>绿为利好 · 红为示警</small>
+                </div>
+              </div>
+              <div v-if="!moreDecrees" class="changes" :class="{ expanded: showAllChanges }">
+                <div
+                  v-for="item in visibleChanges"
+                  :key="game.turn + '-' + item.id"
+                  class="delta-card"
+                  :class="isGoodChange(item) ? 'pos' : 'neg'"
                 >
-                  {{ d.title }}
-                </button>
+                  <div class="delta-card-top">
+                    <span class="delta-name">{{ item.label }}</span>
+                    <strong class="delta-badge">
+                      <i aria-hidden="true">{{ deltaArrow(item) }}</i>
+                      {{ changeText(item) }}
+                    </strong>
+                  </div>
+                  <div class="delta-route">
+                    <span>{{ valueText(item.before) }}</span>
+                    <i aria-hidden="true">→</i>
+                    <b>{{ valueText(item.after) }}{{ item.unit }}</b>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- 施政与问史工作台（共享受限高度，展开国策谱或拟诏绝不撑长页面） -->
+          <div class="orders">
+            <div class="orders-bar">
+              <div class="orders-bar-left">
+                <h2>{{ game.status === 'game_over' ? '终局' : '施政' }}</h2>
+                <div v-if="game.status !== 'game_over'" class="suggestions">
+                  <button
+                    v-for="d in starterActions"
+                    :key="d.id"
+                    type="button"
+                    :class="{ picked: isDecreeDrafted(d) }"
+                    :disabled="busy"
+                    :title="d.description"
+                    @click="pickDecree(d)"
+                  >
+                    {{ d.title }}
+                  </button>
+                </div>
+              </div>
+              <div class="orders-bar-right">
                 <button
-                  v-if="activeDecrees.length > starterActions.length"
+                  v-if="game.status !== 'game_over' && activeDecrees.length > starterActions.length"
                   type="button"
+                  class="tool-btn"
+                  :class="{ active: moreDecrees }"
                   data-testid="civsim-more-decrees"
                   :aria-expanded="moreDecrees"
-                  @click="moreDecrees = !moreDecrees"
+                  @click="toggleMoreDecrees"
                 >
                   {{ moreDecrees ? '收起国策谱' : `全部国策 (${activeDecrees.length})` }}
                 </button>
                 <button
+                  v-if="game.status !== 'game_over'"
                   type="button"
+                  class="tool-btn"
+                  :class="{ active: openComposer && authoring === 'decree' }"
                   data-testid="civsim-compose"
                   :disabled="busy"
                   @click="compose('decree')"
                 >
                   自拟政令
                 </button>
+                <button
+                  type="button"
+                  class="text-button"
+                  data-testid="civsim-consult"
+                  :disabled="busy"
+                  @click="compose('consult')"
+                >
+                  问史官
+                </button>
               </div>
+            </div>
 
-              <div v-if="moreDecrees" class="decree-drawer" data-testid="civsim-decree-drawer">
+            <!-- 紧凑横排拟诏 / 问史官栏 -->
+            <form
+              v-if="openComposer"
+              class="composer-box"
+              @submit.prevent="submit(draft)"
+            >
+              <div class="composer-bar">
+                <label for="civsim-input">
+                  {{
+                    authoring === 'consult'
+                      ? '垂询史官（只读复盘，不推进回合）'
+                      : '拟定诏书（可点选最多 3 项国策组合施政）'
+                  }}
+                </label>
+                <div v-if="authoring === 'decree'" class="scale-picks">
+                  <span>规模：</span>
+                  <button
+                    type="button"
+                    :aria-pressed="activeScale === 'small'"
+                    @click="applyScalePrefix('small')"
+                  >
+                    试办
+                  </button>
+                  <button
+                    type="button"
+                    :aria-pressed="activeScale === 'medium'"
+                    @click="applyScalePrefix('medium')"
+                  >
+                    常制
+                  </button>
+                  <button
+                    type="button"
+                    :aria-pressed="activeScale === 'large'"
+                    @click="applyScalePrefix('large')"
+                  >
+                    举国
+                  </button>
+                  <button
+                    v-if="draft.trim()"
+                    type="button"
+                    class="clear-btn"
+                    @click="draft = ''"
+                  >
+                    清空
+                  </button>
+                </div>
+                <div v-else class="scale-picks">
+                  <button
+                    v-for="preset in CONSULT_PRESETS"
+                    :key="preset.text"
+                    type="button"
+                    @click="draft = preset.text"
+                  >
+                    {{ preset.short }}
+                  </button>
+                </div>
+              </div>
+              <div class="composer-row">
+                <textarea
+                  id="civsim-input"
+                  ref="inputEl"
+                  v-model="draft"
+                  data-testid="civsim-policy"
+                  maxlength="2000"
+                  :disabled="busy"
+                  rows="1"
+                  :placeholder="
+                    authoring === 'consult'
+                      ? '例如：当前国势有何隐忧与建议？或：第 1 回合发生了什么？'
+                      : catalog.mode === 'model'
+                        ? '例如：清丈王畿周边隐匿田亩，并在关隘设常平仓备荒'
+                        : '例如：兴修水利、操练士卒（回车直接颁布）'
+                  "
+                  @keydown.enter.exact.prevent="submit(draft)"
+                  @keydown.ctrl.enter.prevent="submit(draft)"
+                  @keydown.meta.enter.prevent="submit(draft)"
+                />
+                <div class="composer-actions">
+                  <button
+                    type="submit"
+                    class="primary compact-primary"
+                    data-testid="civsim-submit"
+                    :disabled="busy || !draft.trim()"
+                  >
+                    {{
+                      busy
+                        ? '办理中…'
+                        : authoring === 'consult'
+                          ? '查阅实录'
+                          : '颁布政令'
+                    }}
+                  </button>
+                  <button
+                    type="button"
+                    class="secondary compact-secondary"
+                    :disabled="busy"
+                    @click="openComposer = false"
+                  >
+                    收起
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            <!-- 反馈提示栏（未备提示 / 澄清 / 史官奏对 / 结算中） -->
+            <div v-if="lockedHint" class="notice compact-notice" role="status">
+              <span>{{ lockedHint }}</span>
+              <button type="button" class="muted-link" @click="lockedHint = ''">知道了</button>
+            </div>
+            <div
+              v-if="clarification"
+              class="notice compact-notice"
+              data-testid="civsim-clarification"
+              role="status"
+            >
+              <span>{{ clarification }}</span>
+            </div>
+            <div
+              v-if="reply"
+              class="notice reply-box"
+              data-testid="civsim-answer"
+              role="status"
+            >
+              <div class="reply-text">{{ reply }}</div>
+              <button type="button" class="muted-link" @click="reply = ''">收起</button>
+            </div>
+            <div v-if="busy && !openComposer" class="notice compact-notice" role="status">
+              <span>{{ catalog.mode === 'model' ? '史官正在推演国势并执笔纪事…' : '正在结算国势…' }}</span>
+            </div>
+
+            <!-- 28 项国策谱（占满剩余高度并在框内平滑滚动） -->
+            <div
+              v-if="moreDecrees && game.status !== 'game_over'"
+              class="decree-drawer"
+              data-testid="civsim-decree-drawer"
+            >
+              <div class="drawer-head">
                 <div class="domain-tabs" role="tablist" aria-label="政令分类">
                   <button
                     v-for="tab in DOMAINS"
@@ -722,127 +1084,53 @@ onUnmounted(() => {
                     {{ tab.label }}
                   </button>
                 </div>
-                <div class="decree-grid">
-                  <button
-                    v-for="d in filteredDecrees"
-                    :key="d.id"
-                    type="button"
-                    class="decree-card"
-                    :class="{ locked: d.available === false }"
-                    :disabled="busy"
-                    :title="d.available === false ? d.unmetReason || '' : d.description"
-                    @click="pickDecree(d)"
-                  >
-                    <div class="decree-card-head">
-                      <strong>{{ d.title }}</strong>
-                      <small>{{ d.available === false ? '未备' : d.difficulty || d.domainLabel }}</small>
-                    </div>
-                    <p>{{ d.available === false ? d.unmetReason : d.description }}</p>
-                  </button>
-                </div>
+                <small>可施政 {{ availableDecreeCount }} / {{ activeDecrees.length }}</small>
               </div>
-
-              <p v-if="!openComposer" class="guide">
-                {{
-                  catalog.mode === 'model'
-                    ? '万相史官已就绪：可自由输入任意历史政令，由模型解析意图并执笔史书。'
-                    : '本地规则引擎：支持 6 大领域 28 项国策及顿号组合施政（如「兴修水利、操练士卒」）。'
-                }}也可直接在万相底部悬浮框下令或输入「问史官：……」。
-              </p>
-            </template>
-            <p v-else class="guide">本局已收卷，国史与存档仍可随时查阅。</p>
-
-            <p v-if="lockedHint" class="notice" role="status">{{ lockedHint }}</p>
-            <p
-              v-if="clarification"
-              class="notice"
-              data-testid="civsim-clarification"
-              role="status"
-            >
-              {{ clarification }}
-            </p>
-
-            <form v-if="openComposer" @submit.prevent="submit(draft)">
-              <div class="composer-bar">
-                <label for="civsim-input">
-                  {{
-                    authoring === 'consult'
-                      ? '垂询史官（只读复盘，不推进回合）'
-                      : '向' + game.name + '颁诏'
-                  }}
-                </label>
-                <div v-if="authoring === 'decree'" class="scale-picks">
-                  <span>动员规模：</span>
-                  <button type="button" @click="applyScalePrefix('small')">试办</button>
-                  <button type="button" @click="applyScalePrefix('medium')">常制</button>
-                  <button type="button" @click="applyScalePrefix('large')">举国</button>
-                </div>
-                <div v-else class="scale-picks">
-                  <button
-                    v-for="preset in CONSULT_PRESETS"
-                    :key="preset"
-                    type="button"
-                    @click="draft = preset"
-                  >
-                    {{ preset.slice(0, 6) }}…
-                  </button>
-                </div>
-              </div>
-              <textarea
-                id="civsim-input"
-                ref="inputEl"
-                v-model="draft"
-                data-testid="civsim-policy"
-                maxlength="2000"
-                :disabled="busy"
-                rows="2"
-                :placeholder="
-                  authoring === 'consult'
-                    ? '例如：当前国势有何隐忧与建议？或：第 1 回合发生了什么？'
-                    : catalog.mode === 'model'
-                      ? '例如：清丈王畿周边隐匿田亩，并在关隘设常平仓备荒'
-                      : '例如：兴修水利、操练士卒（最多组合 3 项国策）'
-                "
-                @keydown.ctrl.enter.prevent="submit(draft)"
-                @keydown.meta.enter.prevent="submit(draft)"
-              />
-              <div class="composer-actions">
+              <div class="decree-grid">
                 <button
-                  class="primary"
-                  data-testid="civsim-submit"
-                  :disabled="busy || !draft.trim()"
-                >
-                  {{
-                    busy
-                      ? '正在结算…'
-                      : authoring === 'consult'
-                        ? '查阅实录'
-                        : '颁布政令'
-                  }}
-                </button>
-                <button
+                  v-for="d in filteredDecrees"
+                  :key="d.id"
                   type="button"
-                  class="secondary"
+                  class="decree-card"
+                  :class="{
+                    locked: d.available === false,
+                    selected: isDecreeDrafted(d),
+                  }"
                   :disabled="busy"
-                  @click="openComposer = false"
+                  :title="d.available === false ? d.unmetReason || '' : d.description"
+                  @click="pickDecree(d)"
                 >
-                  收起
+                  <div class="decree-card-head">
+                    <strong>{{ d.title }}</strong>
+                    <small>{{
+                      isDecreeDrafted(d)
+                        ? '已入诏'
+                        : d.available === false
+                          ? '未备'
+                          : d.difficulty || d.domainLabel
+                    }}</small>
+                  </div>
+                  <p>{{ d.available === false ? d.unmetReason : d.description }}</p>
                 </button>
               </div>
-            </form>
+            </div>
 
-            <p v-if="reply" class="notice" data-testid="civsim-answer" role="status">
-              {{ reply }}
-            </p>
-            <p v-if="busy && !openComposer" class="notice" role="status">
-              {{ catalog.mode === 'model' ? '史官正在推演国势并执笔纪事…' : '正在结算国势…' }}
+            <p v-else-if="!openComposer && !reply && !clarification && !lockedHint" class="guide">
+              {{
+                game.status === 'game_over'
+                  ? '本局已收卷，可切换右上「国史」查阅完整兴衰编年。'
+                  : catalog.mode === 'model'
+                    ? '万相史官已就绪：可点选上方国策，或直接在底部万相框自由拟诏、输入「问史官：……」。'
+                    : '点选推荐国策或展开「全部国策」可组合至多 3 项施政；也可在底部万相框直接下令。'
+              }}
             </p>
           </div>
         </div>
 
+        <!-- 右栏：国势原位涨跌仪表盘（双列紧凑卡片 + 进度警戒线） -->
         <aside class="state">
           <div class="section-head">
-            <h2>国势</h2>
+            <h2>国势总览</h2>
             <button
               v-if="game.panel"
               type="button"
@@ -853,90 +1141,234 @@ onUnmounted(() => {
               {{ showDeepPanel ? '收起肌理' : '制度肌理' }}
             </button>
           </div>
-          <dl>
-            <div v-for="s in game.stats" :key="s.id">
-              <dt>{{ s.label }}</dt>
-              <dd>
-                {{ valueText(s.value) }}<small>{{ s.unit }}</small>
-              </dd>
-            </div>
-          </dl>
 
-          <div v-if="game.panel && showDeepPanel" class="deep-panel" data-testid="civsim-deep-panel">
-            <h3>治理与张力</h3>
-            <dl class="compact-dl">
+          <RealmDiorama
+            v-if="game.progression"
+            :game="game"
+            @open-tree="openTechTree()"
+          />
+
+          <div class="stat-cards">
+            <div
+              v-for="s in game.stats"
+              :key="s.id"
+              class="stat-card"
+              :class="{
+                warn: s.warn,
+                'changed-pos': s.delta !== undefined && s.good !== false,
+                'changed-neg': s.delta !== undefined && s.good === false,
+              }"
+            >
+              <div class="stat-card-top">
+                <span class="stat-label">{{ s.label }}</span>
+                <em
+                  v-if="s.delta !== undefined"
+                  class="inline-delta"
+                  :class="s.good !== false ? 'pos' : 'neg'"
+                >
+                  {{ s.delta > 0 ? '▲ ' : '▼ ' }}{{ signedNumberText(s.delta, s.unit) }}
+                </em>
+              </div>
+              <div class="stat-card-mid">
+                <strong class="stat-val">
+                  {{ valueText(s.value) }}<small>{{ s.unit }}</small>
+                </strong>
+                <span v-if="s.before !== undefined" class="stat-prev">
+                  前 {{ valueText(s.before) }}
+                </span>
+              </div>
+              <div class="stat-meter">
+                <span
+                  class="stat-meter-fill"
+                  :class="{ warn: s.warn }"
+                  :style="{ width: Math.round((s.norm ?? 0.45) * 100) + '%' }"
+                />
+                <i
+                  v-if="s.id === 'food'"
+                  class="meter-threshold"
+                  title="1.0 倍温饱基准线"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div
+            v-if="game.panel && showDeepPanel"
+            class="deep-panel"
+            data-testid="civsim-deep-panel"
+          >
+            <div class="sub-head">
+              <h3>治理与张力</h3>
+              <small>阶级矛盾下降为利好</small>
+            </div>
+            <div class="ind-grid">
               <div
                 v-for="ind in game.panel.indicators"
                 :key="ind.id"
-                :class="{ warn: ind.warn }"
+                class="ind-cell"
+                :class="{
+                  warn: ind.warn,
+                  'changed-pos': ind.delta !== undefined && ind.good !== false,
+                  'changed-neg': ind.delta !== undefined && ind.good === false,
+                }"
               >
-                <dt>{{ ind.label }}</dt>
-                <dd>
-                  {{ valueText(ind.value) }}<small>{{ ind.unit }}</small>
-                </dd>
+                <div class="ind-top">
+                  <span class="ind-label">{{ ind.label }}</span>
+                  <div class="ind-nums">
+                    <strong>{{ valueText(ind.value) }}<small>{{ ind.unit }}</small></strong>
+                    <em
+                      v-if="ind.delta !== undefined"
+                      class="inline-delta tiny"
+                      :class="ind.good !== false ? 'pos' : 'neg'"
+                    >
+                      {{ ind.delta > 0 ? '▲+' : '▼' }}{{ valueText(ind.delta) }}
+                    </em>
+                  </div>
+                </div>
+                <div class="ind-meter">
+                  <span
+                    :class="{ warn: ind.warn, inverse: ind.inverse }"
+                    :style="{ width: Math.round((ind.norm ?? 0.3) * 100) + '%' }"
+                  />
+                </div>
               </div>
-            </dl>
+            </div>
 
-            <h3>版图与赋役</h3>
-            <p class="meta-line">
-              核心畿甸 <b>{{ valueText(game.panel.structure.territoryCore) }}</b> km² ·
-              边疆 <b>{{ valueText(game.panel.structure.territoryFrontier) }}</b> km²
-            </p>
-            <p class="meta-line">
-              赋税：{{ game.panel.structure.extractions.join('、') }}
-            </p>
-            <div class="accum-pills">
-              <span v-for="acc in game.panel.accumulations" :key="acc.id">
-                {{ acc.label }} {{ valueText(acc.value) }}
-              </span>
+            <div class="struct-section">
+              <div class="sub-head">
+                <h3>版图、劳役与五维底蕴</h3>
+                <span class="terr-summary">
+                  畿甸 <b>{{ valueText(game.panel.structure.territoryCore) }}</b> · 边疆
+                  <b>{{ valueText(game.panel.structure.territoryFrontier) }}</b> km²
+                  <em
+                    v-if="game.panel.structure.territoryDelta"
+                    class="inline-delta tiny"
+                    :class="game.panel.structure.territoryDelta > 0 ? 'pos' : 'neg'"
+                  >
+                    {{ signedNumberText(game.panel.structure.territoryDelta, ' km²') }}
+                  </em>
+                </span>
+              </div>
+
+              <div v-if="activeLabor.length" class="labor-wrap">
+                <div class="labor-bar" aria-label="劳役阶层构成">
+                  <span
+                    v-for="seg in activeLabor"
+                    :key="seg.label"
+                    :style="{
+                      width: seg.pct + '%',
+                      background: LABOR_COLORS[seg.label] || '#6b705c',
+                    }"
+                    :title="seg.label + ' ' + seg.pct + '%'"
+                  />
+                </div>
+                <div class="labor-legend">
+                  <span v-for="seg in activeLabor" :key="seg.label">
+                    <i :style="{ background: LABOR_COLORS[seg.label] || '#6b705c' }" />
+                    {{ seg.label }} {{ seg.pct }}%
+                  </span>
+                  <span class="tax-inline">
+                    赋税：{{ game.panel.structure.extractions.join(' / ') }}
+                  </span>
+                </div>
+              </div>
+
+              <div class="accum-pills">
+                <span
+                  v-for="acc in game.panel.accumulations"
+                  :key="acc.id"
+                  :class="{
+                    pos: acc.delta !== undefined && acc.delta >= 0.02,
+                    neg: acc.delta !== undefined && acc.delta <= -0.06,
+                  }"
+                >
+                  {{ acc.label }} <b>{{ valueText(acc.value) }}</b>
+                  <em v-if="acc.delta !== undefined && (acc.delta >= 0.02 || acc.delta <= -0.06)">
+                    {{ signedNumberText(acc.delta) }}
+                  </em>
+                </span>
+              </div>
             </div>
           </div>
         </aside>
       </div>
 
-      <section v-else class="archive">
-        <div class="section-head">
-          <h2>国史</h2>
-          <small>{{ (game.history[0]?.turn ?? 0) > 0 ? '最近' : '共' }} {{ game.history.length }} 篇记事</small>
-        </div>
-        <article
-          v-for="entry in entries"
-          :key="entry.turn"
-          class="archive-entry"
-        >
-          <div class="date">
-            {{ historicalYear(entry.year) }}
-            <small>{{ entry.turn === 0 ? '开国' : '第 ' + entry.turn + ' 回合' }}</small>
-          </div>
-          <div>
-            <h3>{{ entry.turn === 0 ? '立国' : entry.decree }}</h3>
-            <p>{{ entry.narrative }}</p>
-            <div v-if="entry.changes.length" class="changes">
-              <span
-                v-for="change in entry.changes"
-                :key="change.id"
-                :class="isPositiveChange(change) ? 'pos' : 'neg'"
-              >
-                {{ change.label }} {{ changeText(change) }}
-              </span>
-            </div>
-          </div>
-        </article>
-        <button
-          v-if="entries.length < game.history.length"
-          class="secondary"
-          @click="historyCount += 8"
-        >
-          更早的记事
-        </button>
-      </section>
+      <!-- 2B. 天工·典章演进图谱（单屏分栏展示科技树、典章流转与文物线稿） -->
+      <TechTree
+        v-else-if="activeTab === 'tree' && game.progression"
+        :game="game"
+        :progression="game.progression"
+        :focused-id="focusedNodeId"
+        @select-node="focusedNodeId = $event"
+        @stage-decrees="stageFromTree"
+      />
 
-      <p v-if="error" class="notice error" role="alert">
-        {{ error }}
-        <button v-if="pendingTurn" :disabled="busy" @click="reconcile">
-          重读本局
-        </button>
-      </p>
+      <!-- 2C. 国史编年视图（内部平滑滚动，外层页面不滚动） -->
+      <section v-else class="archive">
+        <div class="section-head archive-head">
+          <h2>国史实录</h2>
+          <div class="archive-head-right">
+            <small>共 {{ game.history.length }} 篇记事</small>
+            <button type="button" class="secondary compact-secondary" @click="activeTab = 'court'">
+              返回朝堂
+            </button>
+          </div>
+        </div>
+        <div class="archive-scroll">
+          <article
+            v-for="entry in entries"
+            :key="entry.turn"
+            class="archive-entry"
+          >
+            <div class="date">
+              {{ historicalYear(entry.year) }}
+              <small>
+                {{ entry.turn === 0 ? '开国' : '第 ' + entry.turn + ' 回合' }}
+                <template v-if="entry.years"> · 历 {{ entry.years }} 载</template>
+              </small>
+            </div>
+            <div class="archive-body">
+              <div class="archive-title-row">
+                <h3>{{ entry.turn === 0 ? '立国' : entry.decree }}</h3>
+                <div v-if="entry.outcomes?.length" class="outcome-seals">
+                  <span
+                    v-for="(out, idx) in entry.outcomes"
+                    :key="idx"
+                    class="outcome-seal"
+                    :class="'tier-' + out.tier"
+                  >
+                    {{ out.name }} <b>{{ out.tierLabel }}</b>
+                  </span>
+                </div>
+              </div>
+              <p>{{ entry.narrative }}</p>
+              <div v-if="entry.unlocks?.length" class="archive-unlocks">
+                <button
+                  v-for="u in entry.unlocks"
+                  :key="u.id"
+                  type="button"
+                  class="archive-unlock-pill"
+                  @click="openTechTree(u.targetNodeId)"
+                >
+                  ✦ {{ u.kindLabel }}：{{ u.name }}
+                </button>
+              </div>
+              <div v-if="entry.changes.length" class="archive-changes">
+                <span
+                  v-for="change in entry.changes"
+                  :key="change.id"
+                  class="archive-change-pill"
+                  :class="isGoodChange(change) ? 'pos' : 'neg'"
+                >
+                  {{ change.label }}
+                  <em>{{ valueText(change.before) }} → {{ valueText(change.after) }}{{ change.unit }}</em>
+                  <b>({{ changeText(change) }})</b>
+                </span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
     </section>
   </main>
 </template>

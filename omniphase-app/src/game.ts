@@ -22,39 +22,150 @@ export interface Stat {
   label: string
   value: number
   unit: string
+  norm?: number
   warn?: boolean
+  inverse?: boolean
+  before?: number
+  delta?: number
+  good?: boolean
+}
+export interface AccumulationStat {
+  id: string
+  label: string
+  value: number
+  before?: number
+  delta?: number
+  good?: boolean
 }
 export interface DeepPanel {
   indicators: Stat[]
   structure: {
     territoryCore: number
     territoryFrontier: number
+    territoryTotal?: number
+    territoryBefore?: number
+    territoryDelta?: number
     landSystem: string
+    landSystemBefore?: string
     polity: string
+    polityBefore?: string
     extractions: string[]
     labor: { label: string; pct: number }[]
   }
-  accumulations: { id: string; label: string; value: number }[]
+  accumulations: AccumulationStat[]
 }
 export interface Change {
   id: string
   label: string
   before: number
   after: number
+  delta?: number
+  good?: boolean
+  group?: 'core' | 'deep'
   unit: string
+}
+export interface TurnOutcome {
+  name: string
+  scale: 'small' | 'medium' | 'large' | string
+  scaleLabel?: string
+  tier: 'great' | 'success' | 'partial' | 'failure' | 'disaster' | 'blocked' | string
+  tierLabel: string
+  met: boolean
+}
+export interface UnlockBadge {
+  id: string
+  targetNodeId: string
+  kind: 'tech' | 'land' | 'polity' | 'tax' | string
+  kindLabel: string
+  branchId?: string
+  branchName: string
+  name: string
+  subtitle: string
+  art: string
+  effect: string
+}
+export interface TechReq {
+  key: string
+  label: string
+  current: number
+  target: number
+  currentText: string
+  targetText: string
+  met: boolean
+  ratio: number
+}
+export interface TechNode {
+  id: string
+  branchId: string
+  branchName: string
+  stage: number
+  era: string
+  name: string
+  subtitle: string
+  art: string
+  effect: string
+  chronicleNote: string
+  status: 'unlocked' | 'next' | 'locked'
+  unlocked: boolean
+  progress: number
+  reqs: TechReq[]
+  suggestedDecrees: string[]
+}
+export interface TechBranch {
+  id: 'agriculture' | 'engineering' | 'knowledge' | string
+  name: string
+  metricKey: string
+  accent: string
+  level: number
+  levelText: string
+  unlockedCount: number
+  totalCount: number
+  nodes: TechNode[]
+}
+export interface InstitutionNode {
+  id: string
+  name: string
+  summary: string
+  triggerHint: string
+  suggestedDecrees: string[]
+  active: boolean
+  unlocked: boolean
+  status: 'active' | 'unlocked' | 'locked'
+}
+export interface InstitutionGroup {
+  title: string
+  currentId?: string
+  activeIds?: string[]
+  nodes: InstitutionNode[]
+}
+export interface Progression {
+  unlockedCount: number
+  totalNodes: number
+  focusNodeId: string
+  recentUnlocks: UnlockBadge[]
+  branches: TechBranch[]
+  institutions: {
+    land: InstitutionGroup
+    polity: InstitutionGroup
+    tax: InstitutionGroup
+  }
 }
 export interface Entry {
   turn: number
   year: number
+  years?: number
   decree: string
   narrative: string
+  outcomes?: TurnOutcome[]
   changes: Change[]
+  unlocks?: UnlockBadge[]
 }
 export interface Game extends GameSummary {
   status: 'active' | 'game_over'
   ending?: string | null
   stats: Stat[]
   panel?: DeepPanel
+  progression?: Progression
   availableDecrees?: Decree[]
   history: Entry[]
   clarification?: string
@@ -145,9 +256,25 @@ export function valueText(value: number) {
   return numberFormat.format(value)
 }
 
+export function changeDelta(change: Change): number {
+  return typeof change.delta === 'number'
+    ? change.delta
+    : Number((change.after - change.before).toFixed(2))
+}
+
+export function isGoodChange(change: Change): boolean {
+  if (typeof change.good === 'boolean') return change.good
+  const d = changeDelta(change)
+  return change.id === 'class_tension' ? d < 0 : d > 0
+}
+
 export function changeText(change: Change) {
-  const delta = change.after - change.before
+  const delta = changeDelta(change)
   return (delta > 0 ? '+' : '') + valueText(delta) + change.unit
+}
+
+export function signedNumberText(delta: number, unit = '') {
+  return (delta > 0 ? '+' : '') + valueText(delta) + unit
 }
 
 /** Fallback client-side archive lookup if backend consult is unreachable. */
@@ -183,7 +310,7 @@ export function consultHistory(question: string, game: Game): string {
     )
   }
   const changes = entry.changes
-    .slice(0, 3)
+    .slice(0, 4)
     .map(row => row.label + ' ' + changeText(row))
     .join('、')
   return (

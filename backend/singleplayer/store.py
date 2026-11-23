@@ -24,6 +24,7 @@ from backend.singleplayer.model import (
     model_consult,
     model_turn,
 )
+from backend.singleplayer.progression import detect_turn_unlocks, evaluate_progression
 from backend.singleplayer.rules import (
     OPENINGS,
     catalog,
@@ -33,6 +34,8 @@ from backend.singleplayer.rules import (
     parse_local,
     resolve_local,
     statistics,
+    turn_changes,
+    turn_outcomes,
 )
 from backend.templates.actions import generate_full_action_catalog
 from backend.templates.civilizations import load_civ_state
@@ -176,6 +179,38 @@ class LocalGames:
                 ]
             }
 
+    @staticmethod
+    def _progression_sets(
+        db: sqlite3.Connection, game: str, upto_turn: int
+    ) -> tuple[set[str], set[str], set[str], list[dict[str, Any]] | None]:
+        """收集截至指定回合已解锁的田制、政体、技艺集合及最新回合的新解锁列表。"""
+        rows = db.execute(
+            """
+            SELECT json_extract(state, '$.land_system') AS land,
+                   json_extract(state, '$.polity.decision_structure') AS dec,
+                   entry
+            FROM positions WHERE game=? AND turn<=? ORDER BY turn DESC
+        """,
+            (game, upto_turn),
+        ).fetchall()
+        lands = {r["land"] for r in rows if r["land"]}
+        polities = {r["dec"] for r in rows if r["dec"]}
+        techs: set[str] = set()
+        latest_unlocks: list[dict[str, Any]] | None = [] if upto_turn <= 0 else None
+        for idx, r in enumerate(rows):
+            raw = r["entry"]
+            if not raw:
+                continue
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                continue
+            if idx == 0 and upto_turn > 0 and "unlocks" in parsed:
+                latest_unlocks = parsed["unlocks"]
+            for u in parsed.get("unlocks") or ():
+                if isinstance(u, dict) and u.get("kind") == "tech" and u.get("id"):
+                    techs.add(str(u["id"]))
+        return lands, polities, techs, latest_unlocks
+
     def snapshot(
         self, db: sqlite3.Connection, game: str, turn: int | None, clarification: str | None = None
     ) -> dict[str, Any]:
@@ -188,17 +223,33 @@ class LocalGames:
             "SELECT * FROM positions WHERE game=? AND turn=?", (game, turn)
         ).fetchone()
         state = CivState.model_validate_json(row["state"])
+        prev_state: CivState | None = None
+        if turn and turn > 0:
+            prev_row = db.execute(
+                "SELECT state FROM positions WHERE game=? AND turn=?", (game, turn - 1)
+            ).fetchone()
+            if prev_row:
+                prev_state = CivState.model_validate_json(prev_row["state"])
         entries = db.execute(
             """
             SELECT entry FROM positions WHERE game=? AND turn<=? ORDER BY turn DESC LIMIT 64
         """,
             (game, turn),
         ).fetchall()
+        lands, polities, techs, latest_unlocks = self._progression_sets(db, game, int(turn or 0))
         result = self.summary(game, row, state) | {
             "status": "game_over" if row["ending"] else "active",
             "ending": row["ending"],
-            "stats": statistics(state),
-            "panel": deep_panel(state),
+            "stats": statistics(state, prev_state),
+            "panel": deep_panel(state, prev_state),
+            "progression": evaluate_progression(
+                state,
+                prev_state,
+                visited_lands=lands,
+                visited_polities=polities,
+                visited_techs=techs,
+                recent_unlocks=latest_unlocks,
+            ),
             "availableDecrees": generate_full_action_catalog(state),
             "history": [json.loads(item["entry"]) for item in reversed(entries)],
         }
@@ -518,44 +569,26 @@ class LocalGames:
         narrative = result.narrative or chronicle(result)
         if ending:
             narrative += f"此朝史书至此收卷，终局缘由：{reason_label(ending)}。"
-        changes = []
-        for old, new in zip(statistics(state), statistics(after), strict=True):
-            if new["value"] != old["value"]:
-                changes.append(
-                    {
-                        "id": new["id"],
-                        "label": new["label"],
-                        "unit": new["unit"],
-                        "before": old["value"],
-                        "after": new["value"],
-                    }
-                )
-        if round(after.grain_reserve, 2) != round(state.grain_reserve, 2):
-            changes.append(
-                {
-                    "id": "grain_reserve",
-                    "label": "官仓储粮",
-                    "unit": "年",
-                    "before": round(state.grain_reserve, 2),
-                    "after": round(after.grain_reserve, 2),
-                }
-            )
-        if after.territory_core + after.territory_frontier != state.territory_core + state.territory_frontier:
-            changes.append(
-                {
-                    "id": "territory",
-                    "label": "版图",
-                    "unit": "km²",
-                    "before": state.territory_core + state.territory_frontier,
-                    "after": after.territory_core + after.territory_frontier,
-                }
-            )
+        changes = turn_changes(state, after)
+        prev_lands, prev_polities, prev_techs, _ = self._progression_sets(
+            db, game, state.turn
+        )
+        unlocks = detect_turn_unlocks(
+            state,
+            after,
+            visited_techs=prev_techs,
+            visited_lands=prev_lands,
+            visited_polities=prev_polities,
+        )
         entry = {
             "turn": after.turn,
             "year": after.year,
+            "years": max(1, round(after.year - state.year)),
             "decree": text,
             "narrative": narrative,
+            "outcomes": turn_outcomes(result),
             "changes": changes,
+            "unlocks": unlocks,
         }
         self._save(db, game, after, entry, ending, rebellion, collapse)
         db.execute("UPDATE games SET head=? WHERE id=?", (after.turn, game))
