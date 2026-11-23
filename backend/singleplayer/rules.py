@@ -107,6 +107,18 @@ EXTRACTION_LABELS = {
     "tax_monetary": "折钱货币税",
     "commercial_tax": "关市商税",
 }
+TIER_LABELS: dict[ActionResultTier, tuple[str, str]] = {
+    ActionResultTier.GREAT_SUCCESS: ("great", "大成"),
+    ActionResultTier.SUCCESS: ("success", "顺遂"),
+    ActionResultTier.PARTIAL: ("partial", "功半"),
+    ActionResultTier.FAILURE: ("failure", "未果"),
+    ActionResultTier.DISASTER: ("disaster", "偾事"),
+}
+SCALE_LABELS = {
+    "small": "试办",
+    "medium": "常制",
+    "large": "举国",
+}
 
 # 按「领域 × 档位」提供多套白话史笔模板（由回合种子确定性轮换，彻底告别单句复读）
 DOMAIN_TIER_NOTES: dict[str, dict[ActionResultTier, tuple[str, ...]]] = {
@@ -253,79 +265,244 @@ def catalog(state: CivState | None = None) -> dict[str, Any]:
     }
 
 
-def statistics(s: CivState) -> list[dict[str, Any]]:
-    values = [
-        ("population", "人口", s.population, "人"),
-        ("stability", "稳定", s.stability, "点"),
-        ("authority", "统治力", s.authority, "点"),
-        ("food", "粮食供需比", calculate_food_surplus_from_state(s), "倍"),
-        ("agriculture", "农业技术", s.tech_agriculture, "级"),
-        ("engineering", "工程技术", s.tech_engineering, "级"),
-    ]
-    return [
-        {"id": key, "label": label, "value": round(value, 2), "unit": unit}
-        for key, label, value, unit in values
-    ]
+def _clamp01(val: float) -> float:
+    return round(min(1.0, max(0.0, val)), 3)
 
 
-def deep_panel(s: CivState) -> dict[str, Any]:
-    """输出深层制度、社会张力与底蕴数据，让玩家看清王朝肌理。"""
-    ct = estimate_class_tension(s)
-    ec = estimate_elite_cohesion(s)
-    gov = governance_efficiency_from_state(s)
-    polity_text = " · ".join(
+def statistics(s: CivState, prev: CivState | None = None) -> list[dict[str, Any]]:
+    food = calculate_food_surplus_from_state(s)
+    specs = [
+        ("population", "人口", round(s.population, 2), "人", _clamp01(s.population / 180000), False),
+        ("stability", "稳定", round(s.stability, 2), "点", _clamp01(s.stability / 100), s.stability < 35),
+        ("authority", "统治力", round(s.authority, 2), "点", _clamp01(s.authority / 100), s.authority < 25),
+        ("food", "粮食供需比", round(food, 2), "倍", _clamp01(food / 2.0), food < 1.0),
+        ("agriculture", "农业技术", round(s.tech_agriculture, 2), "级", _clamp01(s.tech_agriculture / 5.0), False),
+        ("engineering", "工程技术", round(s.tech_engineering, 2), "级", _clamp01(s.tech_engineering / 5.0), False),
+    ]
+    prev_map = {item["id"]: item["value"] for item in statistics(prev)} if prev is not None else {}
+    rows: list[dict[str, Any]] = []
+    for key, label, val, unit, norm, warn in specs:
+        row: dict[str, Any] = {
+            "id": key,
+            "label": label,
+            "value": val,
+            "unit": unit,
+            "norm": norm,
+        }
+        if warn:
+            row["warn"] = True
+        if key in prev_map:
+            old_val = prev_map[key]
+            delta = round(val - old_val, 2)
+            if delta != 0:
+                row["before"] = old_val
+                row["delta"] = delta
+                row["good"] = delta > 0
+        rows.append(row)
+    return rows
+
+
+def _polity_text(s: CivState) -> str:
+    return " · ".join(
         (
             AUTHORITY_SRC_LABELS.get(s.polity.authority_source.value, s.polity.authority_source.value),
             DECISION_LABELS.get(s.polity.decision_structure.value, s.polity.decision_structure.value),
             SUCCESSION_LABELS.get(s.polity.succession.value, s.polity.succession.value),
         )
     )
-    return {
-        "indicators": [
-            {"id": "grain_reserve", "label": "官仓储粮", "value": round(s.grain_reserve, 2), "unit": "年"},
-            {"id": "governance", "label": "治理效率", "value": round(gov * 100, 1), "unit": "%"},
-            {"id": "bureaucratization", "label": "官僚化", "value": round(s.bureaucratization * 100, 1), "unit": "%"},
-            {"id": "literacy", "label": "识字率", "value": round(s.literacy_rate() * 100, 1), "unit": "%"},
-            {"id": "knowledge", "label": "知识技术", "value": round(s.tech_knowledge, 2), "unit": "级"},
-            {
-                "id": "class_tension",
-                "label": "阶级矛盾",
-                "value": round(ct * 100, 1),
-                "unit": "%",
-                "warn": ct >= 0.65,
-            },
-            {
-                "id": "elite_cohesion",
-                "label": "精英凝聚",
-                "value": round(ec * 100, 1),
-                "unit": "%",
-                "warn": ec <= 0.25,
-            },
+
+
+def deep_panel(s: CivState, prev: CivState | None = None) -> dict[str, Any]:
+    """输出深层制度、社会张力与底蕴数据（含相对上一回合的原位差值与极性）。"""
+    ct = estimate_class_tension(s)
+    ec = estimate_elite_cohesion(s)
+    gov = governance_efficiency_from_state(s)
+    polity_text = _polity_text(s)
+    land_text = LAND_LABELS.get(s.land_system.value, s.land_system.value)
+
+    ind_specs = [
+        ("grain_reserve", "官仓储粮", round(s.grain_reserve, 2), "年", _clamp01(s.grain_reserve / 1.2), s.grain_reserve < 0.08, False),
+        ("governance", "治理效率", round(gov * 100, 1), "%", _clamp01(gov), gov < 0.10, False),
+        ("bureaucratization", "官僚化", round(s.bureaucratization * 100, 1), "%", _clamp01(s.bureaucratization), False, False),
+        ("literacy", "识字率", round(s.literacy_rate() * 100, 1), "%", _clamp01(s.literacy_rate() / 0.5), False, False),
+        ("knowledge", "知识技术", round(s.tech_knowledge, 2), "级", _clamp01(s.tech_knowledge / 5.0), False, False),
+        ("class_tension", "阶级矛盾", round(ct * 100, 1), "%", _clamp01(ct), ct >= 0.65, True),
+        ("elite_cohesion", "精英凝聚", round(ec * 100, 1), "%", _clamp01(ec), ec <= 0.25, False),
+    ]
+
+    prev_panel = deep_panel(prev) if prev is not None else None
+    prev_ind = {item["id"]: item["value"] for item in prev_panel["indicators"]} if prev_panel else {}
+    prev_acc = {item["id"]: item["value"] for item in prev_panel["accumulations"]} if prev_panel else {}
+
+    indicators: list[dict[str, Any]] = []
+    for key, label, val, unit, norm, warn, inverse in ind_specs:
+        item: dict[str, Any] = {
+            "id": key,
+            "label": label,
+            "value": val,
+            "unit": unit,
+            "norm": norm,
+            "warn": warn,
+        }
+        if inverse:
+            item["inverse"] = True
+        if key in prev_ind:
+            old_val = prev_ind[key]
+            delta = round(val - old_val, 2)
+            if delta != 0:
+                item["before"] = old_val
+                item["delta"] = delta
+                item["good"] = (delta < 0) if inverse else (delta > 0)
+        indicators.append(item)
+
+    acc_specs = [
+        ("academic", "学术", round(s.accumulations.academic, 2)),
+        ("military", "军事", round(s.accumulations.military, 2)),
+        ("commercial", "商业", round(s.accumulations.commercial, 2)),
+        ("administrative", "行政", round(s.accumulations.administrative, 2)),
+        ("cultural", "礼乐", round(s.accumulations.cultural, 2)),
+    ]
+    accumulations: list[dict[str, Any]] = []
+    for key, label, val in acc_specs:
+        acc_item: dict[str, Any] = {"id": key, "label": label, "value": val}
+        if key in prev_acc:
+            old_val = prev_acc[key]
+            delta = round(val - old_val, 2)
+            if delta != 0:
+                acc_item["before"] = old_val
+                acc_item["delta"] = delta
+                acc_item["good"] = delta > 0
+        accumulations.append(acc_item)
+
+    total_terr = s.territory_core + s.territory_frontier
+    structure: dict[str, Any] = {
+        "territoryCore": s.territory_core,
+        "territoryFrontier": s.territory_frontier,
+        "territoryTotal": total_terr,
+        "landSystem": land_text,
+        "polity": polity_text,
+        "extractions": [
+            EXTRACTION_LABELS.get(item.value, item.value)
+            for item in s.surplus_extraction
         ],
-        "structure": {
-            "territoryCore": s.territory_core,
-            "territoryFrontier": s.territory_frontier,
-            "landSystem": LAND_LABELS.get(s.land_system.value, s.land_system.value),
-            "polity": polity_text,
-            "extractions": [
-                EXTRACTION_LABELS.get(item.value, item.value)
-                for item in s.surplus_extraction
-            ],
-            "labor": [
-                {"label": "自由民", "pct": round(s.labor_distribution.free_citizens * 100)},
-                {"label": "徭役", "pct": round(s.labor_distribution.corvee * 100)},
-                {"label": "农奴", "pct": round(s.labor_distribution.serf * 100)},
-                {"label": "奴隶", "pct": round(s.labor_distribution.slave * 100)},
-            ],
-        },
-        "accumulations": [
-            {"id": "academic", "label": "学术", "value": round(s.accumulations.academic, 2)},
-            {"id": "military", "label": "军事", "value": round(s.accumulations.military, 2)},
-            {"id": "commercial", "label": "商业", "value": round(s.accumulations.commercial, 2)},
-            {"id": "administrative", "label": "行政", "value": round(s.accumulations.administrative, 2)},
-            {"id": "cultural", "label": "礼乐", "value": round(s.accumulations.cultural, 2)},
+        "labor": [
+            {"label": "自由民", "pct": round(s.labor_distribution.free_citizens * 100)},
+            {"label": "徭役", "pct": round(s.labor_distribution.corvee * 100)},
+            {"label": "农奴", "pct": round(s.labor_distribution.serf * 100)},
+            {"label": "奴隶", "pct": round(s.labor_distribution.slave * 100)},
         ],
     }
+    if prev is not None:
+        prev_terr = prev.territory_core + prev.territory_frontier
+        if total_terr != prev_terr:
+            structure["territoryBefore"] = prev_terr
+            structure["territoryDelta"] = total_terr - prev_terr
+        prev_land = LAND_LABELS.get(prev.land_system.value, prev.land_system.value)
+        if land_text != prev_land:
+            structure["landSystemBefore"] = prev_land
+        prev_pol = _polity_text(prev)
+        if polity_text != prev_pol:
+            structure["polityBefore"] = prev_pol
+
+    return {
+        "indicators": indicators,
+        "structure": structure,
+        "accumulations": accumulations,
+    }
+
+
+def turn_changes(before: CivState, after: CivState) -> list[dict[str, Any]]:
+    """计算前后两轮的完整数值变动（含正负利弊极性与核心/深层分组）。"""
+    changes: list[dict[str, Any]] = []
+    for item in statistics(after, before):
+        if "delta" in item:
+            changes.append(
+                {
+                    "id": item["id"],
+                    "label": "粮食供需比" if item["id"] == "food" else item["label"],
+                    "unit": item["unit"],
+                    "before": item["before"],
+                    "after": item["value"],
+                    "delta": item["delta"],
+                    "good": item["good"],
+                    "group": "core",
+                }
+            )
+    panel = deep_panel(after, before)
+    for ind in panel["indicators"]:
+        if "delta" not in ind:
+            continue
+        is_core = ind["id"] == "grain_reserve"
+        threshold = 0.01 if ind["unit"] in ("年", "级") else 0.1
+        if abs(ind["delta"]) < threshold:
+            continue
+        changes.append(
+            {
+                "id": ind["id"],
+                "label": ind["label"],
+                "unit": ind["unit"],
+                "before": ind["before"],
+                "after": ind["value"],
+                "delta": ind["delta"],
+                "good": ind["good"],
+                "group": "core" if is_core else "deep",
+            }
+        )
+    struct = panel["structure"]
+    if "territoryDelta" in struct:
+        changes.append(
+            {
+                "id": "territory",
+                "label": "版图",
+                "unit": "km²",
+                "before": struct["territoryBefore"],
+                "after": struct["territoryTotal"],
+                "delta": struct["territoryDelta"],
+                "good": struct["territoryDelta"] > 0,
+                "group": "core",
+            }
+        )
+    for acc in panel["accumulations"]:
+        # 仅在底蕴发生显著进益 (>= +0.02) 或实质折损 (<= -0.06，排除每轮自然微衰减) 时列入本轮变动要报
+        if "delta" in acc and (acc["delta"] >= 0.02 or acc["delta"] <= -0.06):
+            changes.append(
+                {
+                    "id": f"acc_{acc['id']}",
+                    "label": f"{acc['label']}底蕴",
+                    "unit": "",
+                    "before": acc["before"],
+                    "after": acc["value"],
+                    "delta": acc["delta"],
+                    "good": acc["good"],
+                    "group": "deep",
+                }
+            )
+    return changes
+
+
+def turn_outcomes(result: FullTurnResult) -> list[dict[str, Any]]:
+    """提取每项子政令的结算品阶，供前端展示清晰回执徽章。"""
+    outcomes: list[dict[str, Any]] = []
+    for sub in result.subtasks:
+        if sub.result_tier is None:
+            continue
+        met = bool(sub.intent.prerequisites.met)
+        if not met:
+            tier_key, tier_cn = "blocked", "未备"
+        else:
+            tier_key, tier_cn = TIER_LABELS.get(sub.result_tier, ("partial", "已办"))
+        scale_val = sub.intent.scale.value
+        outcomes.append(
+            {
+                "name": sub.intent.action_type,
+                "scale": scale_val,
+                "scaleLabel": SCALE_LABELS.get(scale_val, "常制"),
+                "tier": tier_key,
+                "tierLabel": tier_cn,
+                "met": met,
+            }
+        )
+    return outcomes
 
 
 def _suggest_similar(fragment: str) -> str:

@@ -217,3 +217,110 @@ def test_host_model_bridge_auto_detect_and_mode_toggle(tmp_path, monkeypatch) ->
     state_flag["available"] = False
     fallback_cat = store.catalog_info()
     assert fallback_cat["mode"] == "offline"
+
+
+def test_full_dimension_deltas_polarity_and_outcomes(tmp_path):
+    """验证单回合推进后，核心国势、深层治理指标、五维底蕴均带原位差值、极性与子政令品阶回执。"""
+    from backend.singleplayer.rules import deep_panel, turn_changes
+
+    store = LocalGames(tmp_path / "deltas.db")
+    opened = store.mutate("new", {"templateId": "zhou", "requestId": "open-zhou"})
+    stepped = store.mutate(
+        "turn",
+        {
+            "gameId": opened["gameId"],
+            "expectedTurn": 0,
+            "input": "兴修水利、设立学宫",
+            "requestId": "turn-1",
+        },
+    )
+    latest = stepped["history"][-1]
+    assert len(latest["outcomes"]) == 2
+    assert {o["name"] for o in latest["outcomes"]} == {"兴修水利", "设立学宫"}
+    assert all(o["tierLabel"] in ("大成", "顺遂", "功半", "未果", "偾事") for o in latest["outcomes"])
+
+    # 快照原位携带上一回合 before / delta / good，且重启重读完全一致
+    assert any("delta" in s and "before" in s for s in stepped["stats"])
+    assert store.get(opened["gameId"]) == stepped
+
+    # 验证阶级矛盾（inverse=True）的利弊极性反转：上升为 bad (good=False)，下降为 good (good=True)
+    s_low = load_civ_state("zhou")
+    s_high = s_low.model_copy(deep=True)
+    s_high.labor_distribution.slave = min(0.6, s_low.labor_distribution.slave + 0.35)
+    s_high.labor_distribution.free_citizens = max(0.05, s_low.labor_distribution.free_citizens - 0.35)
+
+    panel_worse = deep_panel(s_high, s_low)
+    ct_worse = next(i for i in panel_worse["indicators"] if i["id"] == "class_tension")
+    assert ct_worse["delta"] > 0 and ct_worse["good"] is False
+
+    panel_better = deep_panel(s_low, s_high)
+    ct_better = next(i for i in panel_better["indicators"] if i["id"] == "class_tension")
+    assert ct_better["delta"] < 0 and ct_better["good"] is True
+
+    diff_worse = next(c for c in turn_changes(s_low, s_high) if c["id"] == "class_tension")
+    assert diff_worse["good"] is False
+
+
+def test_v12_progression_and_unlocks(tmp_path):
+    """v1.2.0 天工图谱与回合新解锁检测应覆盖全部开局模板、科研跨槛与制度演进。"""
+    from backend.models.schemas import DecisionStructure, LandSystem, SurplusExtraction
+    from backend.singleplayer.progression import detect_turn_unlocks, evaluate_progression
+    from backend.singleplayer.rules import OPENINGS
+    from backend.singleplayer.store import LocalGames
+    from backend.templates import load_civ_state
+
+    for template_id in OPENINGS:
+        state = load_civ_state(template_id)
+        prog = evaluate_progression(state)
+        assert prog["totalNodes"] == 15
+        assert prog["unlockedCount"] >= 3
+        assert prog["recentUnlocks"] == []
+        assert len(prog["branches"]) == 3
+        assert all(len(b["nodes"]) == 5 for b in prog["branches"])
+        assert len(prog["institutions"]["land"]["nodes"]) == 5
+        assert len(prog["institutions"]["polity"]["nodes"]) == 4
+        assert len(prog["institutions"]["tax"]["nodes"]) == 4
+
+    games = LocalGames(tmp_path / "civsim.db")
+    created = games.mutate("new", {"requestId": "req-v12-new", "templateId": "zhou"})
+    assert created["progression"]["unlockedCount"] == 3
+    assert created["progression"]["recentUnlocks"] == []
+
+    snap = created
+    unlock_ids: list[str] = []
+    for step in range(4):
+        snap = games.mutate(
+            "turn",
+            {
+                "requestId": f"req-v12-t{step + 1}",
+                "gameId": created["gameId"],
+                "expectedTurn": snap["turn"],
+                "input": "改进农具、兴修水利",
+            },
+        )
+        unlock_ids = [u["id"] for u in snap["progression"]["recentUnlocks"]]
+        if "agri_bronze_plow" in unlock_ids:
+            break
+    assert "agri_bronze_plow" in unlock_ids
+    assert snap["progression"]["unlockedCount"] >= 4
+    assert [u["id"] for u in snap["history"][-1]["unlocks"]] == unlock_ids
+
+    before = load_civ_state("zhou")
+    after = before.model_copy(deep=True)
+    after.land_system = LandSystem.YEOMAN_SMALLHOLD
+    after.polity = after.polity.model_copy(
+        update={"decision_structure": DecisionStructure.BUREAUCRACY}
+    )
+    after.surplus_extraction = list(before.surplus_extraction) + [
+        SurplusExtraction.COMMERCIAL_TAX
+    ]
+    inst_unlocks = detect_turn_unlocks(before, after)
+    assert {u["kind"] for u in inst_unlocks} == {"land", "polity", "tax"}
+    assert detect_turn_unlocks(
+        before,
+        after,
+        visited_lands={LandSystem.YEOMAN_SMALLHOLD.value},
+        visited_polities={DecisionStructure.BUREAUCRACY.value},
+    ) == [u for u in inst_unlocks if u["kind"] == "tax"]
+
+
