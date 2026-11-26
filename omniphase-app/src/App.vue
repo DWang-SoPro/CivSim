@@ -146,6 +146,9 @@ const activeLabor = computed(() =>
 
 const modeBadge = computed(() => {
   if (catalog.value.mode === 'model') {
+    if (catalog.value.slotsEnabled) {
+      return '万相智能史官 · 槽位直连'
+    }
     const label = catalog.value.modelName ? ` · ${catalog.value.modelName}` : ''
     return catalog.value.hostManaged ? `万相史官${label}` : `模型政令${label}`
   }
@@ -277,6 +280,23 @@ async function toggleMode() {
   error.value = ''
   try {
     catalog.value = await request<Catalog>('mode', { mode: target })
+  } catch (e) {
+    error.value = explainError(e)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function switchToOffline() {
+  if (!connected.value || busy.value || !catalog.value.canToggleModel) return
+  if (catalog.value.mode !== 'model') {
+    error.value = ''
+    return
+  }
+  busy.value = true
+  error.value = ''
+  try {
+    catalog.value = await request<Catalog>('mode', { mode: 'offline' })
   } catch (e) {
     error.value = explainError(e)
   } finally {
@@ -680,8 +700,17 @@ onUnmounted(() => {
           </p>
           <p v-if="loading" class="notice" role="status">正在读取本机存档…</p>
           <div v-if="error" class="notice error" role="alert">
-            {{ error }}
+            <span>{{ error }}</span>
             <button v-if="!connected" type="button" @click="boot">重新连接</button>
+            <button
+              v-else-if="catalog.mode === 'model' && catalog.canToggleModel"
+              type="button"
+              data-testid="civsim-fallback-offline"
+              :disabled="busy"
+              @click="switchToOffline"
+            >
+              切换本机规则
+            </button>
           </div>
         </section>
 
@@ -776,9 +805,20 @@ onUnmounted(() => {
 
       <p v-if="error" class="notice error compact-notice" role="alert">
         <span>{{ error }}</span>
-        <button v-if="pendingTurn" type="button" :disabled="busy" @click="reconcile">
-          重读本局
-        </button>
+        <span class="notice-actions">
+          <button
+            v-if="catalog.mode === 'model' && catalog.canToggleModel"
+            type="button"
+            data-testid="civsim-fallback-offline"
+            :disabled="busy"
+            @click="switchToOffline"
+          >
+            切换本机规则
+          </button>
+          <button v-if="pendingTurn" type="button" :disabled="busy" @click="reconcile">
+            重读本局
+          </button>
+        </span>
       </p>
 
       <!-- 2A. 朝堂双栏驾驶舱 -->

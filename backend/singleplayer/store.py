@@ -25,6 +25,7 @@ from backend.singleplayer.model import (
     model_turn,
 )
 from backend.singleplayer.progression import detect_turn_unlocks, evaluate_progression
+from backend.singleplayer.slots import SlotError
 from backend.singleplayer.rules import (
     OPENINGS,
     catalog,
@@ -105,22 +106,26 @@ class LocalGames:
                     "mode": "offline",
                     "preferredMode": "offline",
                     "canToggleModel": True,
+                    "slotsEnabled": False,
                     "modelName": self.model.name,
                 }
             return self.model, {
                 "mode": "model",
                 "preferredMode": pref,
                 "canToggleModel": True,
+                "slotsEnabled": bool(self.model.slots_url),
                 "modelName": self.model.name,
             }
         if self.host_bridge is not None:
             probed = self.host_bridge.probe()
+            slots_enabled = bool(probed.slots_url) if probed is not None else False
             if probed is not None and pref != "offline":
                 return probed, {
                     "mode": "model",
                     "preferredMode": pref,
                     "canToggleModel": True,
                     "hostManaged": True,
+                    "slotsEnabled": slots_enabled,
                     "modelName": probed.name,
                 }
             return None, {
@@ -128,9 +133,15 @@ class LocalGames:
                 "preferredMode": pref,
                 "canToggleModel": probed is not None,
                 "hostManaged": True,
+                "slotsEnabled": slots_enabled,
                 **({"modelName": probed.name} if probed is not None else {}),
             }
-        return None, {"mode": "offline", "preferredMode": "offline", "canToggleModel": False}
+        return None, {
+            "mode": "offline",
+            "preferredMode": "offline",
+            "canToggleModel": False,
+            "slotsEnabled": False,
+        }
 
     def set_mode(self, mode: str) -> dict[str, Any]:
         if mode not in ("auto", "model", "offline"):
@@ -290,9 +301,16 @@ class LocalGames:
         history = [json.loads(item["entry"]) for item in reversed(entries)]
         active_model, _ = self.resolve_active_model()
         if active_model is not None:
-            answer, source = asyncio.run(
-                model_consult(active_model, state, question, history)
-            )
+            try:
+                answer, source = asyncio.run(
+                    model_consult(
+                        active_model, state, question, history, game_id=game
+                    )
+                )
+            except TypeError:
+                answer, source = asyncio.run(
+                    model_consult(active_model, state, question, history)
+                )
         else:
             answer, source = consult_archive(question, state, history), "local"
         return {"gameId": game, "turn": turn, "answer": answer, "source": source}
@@ -423,6 +441,8 @@ class LocalGames:
                             row["seed"] + state.turn,
                             recent,
                             history_entries=history_entries,
+                            game_id=game,
+                            command_id=command,
                         )
                     )
                 except TypeError:
@@ -436,6 +456,9 @@ class LocalGames:
                             recent,
                         )
                     )
+            except SlotError as err:
+                # Surface cloud slot billing/auth/conflict/pending/deadline errors explicitly
+                raise GameError(err.http_status, err.message) from None
             except (LLMError, TimeoutError):
                 if not allow_local_fallback:
                     raise GameError(

@@ -175,6 +175,7 @@ export interface Catalog {
   preferredMode?: 'auto' | 'model' | 'offline'
   canToggleModel?: boolean
   hostManaged?: boolean
+  slotsEnabled?: boolean
   modelName?: string
   templates: { id: string; name: string; description: string }[]
   decrees: Decree[]
