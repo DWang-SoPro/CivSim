@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "civsim",
   "name": "文明灵",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "entry": "index.html",
   "pageContext": true,
   "armoryId": "research",

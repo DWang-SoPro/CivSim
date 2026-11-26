@@ -1157,6 +1157,13 @@ h3 {
   gap: 8px;
 }
 
+.notice-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .reply-box {
   flex: 0 1 auto;
   min-height: 0;
